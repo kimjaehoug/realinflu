@@ -17,7 +17,16 @@ import {
   Select,
   Stack,
   Typography,
+  CircularProgress,
+  Alert,
+  Chip,
+  Checkbox,
+  FormControlLabel,
+  Button,
+  ButtonGroup,
 } from '@mui/material';
+// API 호출은 커스텀 훅에서 처리됨
+import { useInfluenzaData } from '../hooks/useInfluenzaData';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -31,6 +40,8 @@ import {
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 import { FiChevronRight, FiX } from 'react-icons/fi';
+import { sortWeeksBySeason } from '../utils/seasonUtils';
+import HospitalSearch from './HospitalSearch';
 
 ChartJS.register(
   CategoryScale,
@@ -54,8 +65,8 @@ const navItems = [
 ];
 
 const SEASON_OPTIONS = [
+  '24/25', // 실제 데이터가 있는 절기로 변경
   '25/26',
-  '24/25',
   '23/24',
   '22/23',
   '21/22',
@@ -124,23 +135,174 @@ const WEEKLY_REPORT_URL = 'https://dportal.kdca.go.kr/pot/bbs/BD_selectBbsList.d
 //   },
 // };
 
-const createLineConfig = (labels, values) => ({
-  labels,
-  datasets: [
-    {
-      data: values,
-      borderColor: PRIMARY_COLOR,
-      backgroundColor: PRIMARY_FILL,
-      fill: true,
-      tension: 0.35,
-      borderWidth: 2,
-      pointRadius: 3,
-      pointBackgroundColor: PRIMARY_COLOR,
-      pointBorderColor: '#0f172a',
-      pointBorderWidth: 1.5,
+const createLineConfig = (labels, values) => {
+  console.log('📊 [createLineConfig] 호출:', {
+    labels,
+    values,
+    labelsLength: labels?.length,
+    valuesLength: values?.length,
+  });
+  
+  // labels에서 "주" 제거하여 숫자만 표시 (예: "32주" -> "32")
+  const formattedLabels = labels?.map(label => {
+    if (typeof label === 'string' && label.includes('주')) {
+      return label.replace('주', '');
+    }
+    return label;
+  }) || labels;
+  
+  return {
+    labels: formattedLabels,
+    datasets: [
+      {
+        data: values,
+        borderColor: PRIMARY_COLOR,
+        backgroundColor: PRIMARY_FILL,
+        fill: true,
+        tension: 0.35,
+        borderWidth: 2,
+        pointRadius: 3,
+        pointBackgroundColor: PRIMARY_COLOR,
+        pointBorderColor: '#0f172a',
+        pointBorderWidth: 1.5,
+      },
+    ],
+  };
+};
+
+// 여러 데이터셋을 비교하는 차트 설정 생성
+const createComparisonChartConfig = (labels, datasets) => {
+  // labels에서 "주" 제거하여 숫자만 표시 (예: "32주" -> "32")
+  const formattedLabels = labels?.map(label => {
+    if (typeof label === 'string' && label.includes('주')) {
+      return label.replace('주', '');
+    }
+    return label;
+  }) || labels;
+  
+  console.log('📊 [createComparisonChartConfig] 호출:', {
+    originalLabels: labels,
+    formattedLabels: formattedLabels,
+    labelsLength: labels?.length,
+    datasetsCount: datasets?.length,
+  });
+  
+  return {
+    labels: formattedLabels,
+    datasets,
+  };
+};
+
+// 절기별 색상 매핑 (고정)
+const seasonColorMap = {
+  '17/18절기': { border: 'rgba(147, 197, 253, 0.9)', fill: 'rgba(147, 197, 253, 0.28)' },
+  '18/19절기': { border: 'rgba(96, 165, 250, 0.9)', fill: 'rgba(96, 165, 250, 0.28)' },
+  '19/20절기': { border: 'rgba(139, 92, 246, 0.9)', fill: 'rgba(139, 92, 246, 0.28)' },
+  '20/21절기': { border: 'rgba(167, 139, 250, 0.9)', fill: 'rgba(167, 139, 250, 0.28)' },
+  '21/22절기': { border: 'rgba(94, 234, 212, 0.9)', fill: 'rgba(94, 234, 212, 0.28)' },
+  '22/23절기': { border: 'rgba(134, 239, 172, 0.9)', fill: 'rgba(134, 239, 172, 0.28)' },
+  '23/24절기': { border: 'rgba(59, 130, 246, 0.9)', fill: 'rgba(59, 130, 246, 0.28)' },
+  '24/25절기': { border: 'rgba(30, 58, 138, 0.9)', fill: 'rgba(30, 58, 138, 0.28)' },
+  '25/26절기': { border: 'rgba(239, 68, 68, 0.9)', fill: 'rgba(239, 68, 68, 0.28)' },
+};
+
+// 절기별 색상 팔레트 (기본값용)
+const seasonColors = [
+  { border: 'rgba(147, 197, 253, 0.9)', fill: 'rgba(147, 197, 253, 0.28)' }, // 17/18
+  { border: 'rgba(96, 165, 250, 0.9)', fill: 'rgba(96, 165, 250, 0.28)' }, // 18/19
+  { border: 'rgba(139, 92, 246, 0.9)', fill: 'rgba(139, 92, 246, 0.28)' }, // 19/20
+  { border: 'rgba(167, 139, 250, 0.9)', fill: 'rgba(167, 139, 250, 0.28)' }, // 20/21
+  { border: 'rgba(94, 234, 212, 0.9)', fill: 'rgba(94, 234, 212, 0.28)' }, // 21/22
+  { border: 'rgba(134, 239, 172, 0.9)', fill: 'rgba(134, 239, 172, 0.28)' }, // 22/23
+  { border: 'rgba(59, 130, 246, 0.9)', fill: 'rgba(59, 130, 246, 0.28)' }, // 23/24
+  { border: 'rgba(30, 58, 138, 0.9)', fill: 'rgba(30, 58, 138, 0.28)' }, // 24/25
+  { border: 'rgba(239, 68, 68, 0.9)', fill: 'rgba(239, 68, 68, 0.28)' }, // 25/26
+];
+
+// 연령대별 색상 매핑 (고정)
+const ageGroupColorMap = {
+  '0세': { border: 'rgba(147, 197, 253, 0.9)', fill: 'rgba(147, 197, 253, 0.28)' },
+  '1-6세': { border: 'rgba(30, 58, 138, 0.9)', fill: 'rgba(30, 58, 138, 0.28)' },
+  '7-12세': { border: 'rgba(96, 165, 250, 0.9)', fill: 'rgba(96, 165, 250, 0.28)' },
+  '13-18세': { border: 'rgba(139, 92, 246, 0.9)', fill: 'rgba(139, 92, 246, 0.28)' },
+  '19-49세': { border: 'rgba(94, 234, 212, 0.9)', fill: 'rgba(94, 234, 212, 0.28)' },
+  '50-64세': { border: 'rgba(134, 239, 172, 0.9)', fill: 'rgba(134, 239, 172, 0.28)' },
+  '65세이상': { border: 'rgba(239, 68, 68, 0.9)', fill: 'rgba(239, 68, 68, 0.28)' },
+};
+
+// 연령대별 색상 팔레트 (기본값용)
+const ageGroupColors = [
+  { border: 'rgba(147, 197, 253, 0.9)', fill: 'rgba(147, 197, 253, 0.28)' }, // 0세
+  { border: 'rgba(30, 58, 138, 0.9)', fill: 'rgba(30, 58, 138, 0.28)' }, // 1-6세
+  { border: 'rgba(96, 165, 250, 0.9)', fill: 'rgba(96, 165, 250, 0.28)' }, // 7-12세
+  { border: 'rgba(139, 92, 246, 0.9)', fill: 'rgba(139, 92, 246, 0.28)' }, // 13-18세
+  { border: 'rgba(94, 234, 212, 0.9)', fill: 'rgba(94, 234, 212, 0.28)' }, // 19-49세
+  { border: 'rgba(134, 239, 172, 0.9)', fill: 'rgba(134, 239, 172, 0.28)' }, // 50-64세
+  { border: 'rgba(239, 68, 68, 0.9)', fill: 'rgba(239, 68, 68, 0.28)' }, // 65세이상
+];
+
+// 비교 차트 옵션 (범례 표시)
+const comparisonChartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      display: true,
+      position: 'top',
+      labels: {
+        usePointStyle: true,
+        padding: 15,
+        font: {
+          size: 11,
+        },
+        color: '#374151',
+      },
     },
-  ],
-});
+    tooltip: {
+      backgroundColor: '#0f172a',
+      titleColor: '#f8fafc',
+      bodyColor: '#f8fafc',
+      borderColor: 'rgba(148, 163, 184, 0.4)',
+      borderWidth: 1,
+      padding: 10,
+      callbacks: {
+        title: contexts => {
+          if (!contexts?.length) return '';
+          const label = contexts[0].label ?? '';
+          return `< ${label} >`;
+        },
+        label: context => {
+          const value = context.parsed.y;
+          if (value == null) return '데이터 없음';
+          return `${context.dataset.label}: ${value.toFixed(1)}`;
+        },
+      },
+    },
+  },
+  scales: {
+    x: {
+      grid: { display: false },
+      ticks: { 
+        color: '#6b7280', 
+        font: { size: 10 }, 
+        maxRotation: 45,
+        minRotation: 0,
+        autoSkip: false, // 모든 주차 표시
+      },
+    },
+    y: {
+      grid: { color: 'rgba(148, 163, 184, 0.2)', borderDash: [4, 4] },
+      ticks: { color: '#6b7280', font: { size: 10 } },
+      title: {
+        display: true,
+        text: '인플루엔자 의사환자 분율(/1,000명 당)',
+        color: '#6b7280',
+        font: { size: 11 },
+      },
+    },
+  },
+  interaction: { intersect: false, mode: 'index' },
+};
 
 const visitorOptionFactory = (formatter, seasonLabel, unit) => ({
   responsive: true,
@@ -170,7 +332,17 @@ const visitorOptionFactory = (formatter, seasonLabel, unit) => ({
   scales: {
     x: {
       grid: { display: false },
-      ticks: { color: '#6b7280', font: { size: 10 } },
+      ticks: { 
+        color: '#6b7280', 
+        font: { size: 10 },
+        maxRotation: 45,
+        minRotation: 0,
+        autoSkip: false, // 모든 주차 표시
+        callback: function(value, index) {
+          // labels 배열에서 해당 인덱스의 값을 반환
+          return this.getLabelForValue(value);
+        },
+      },
     },
     y: {
       grid: { color: 'rgba(148, 163, 184, 0.2)', borderDash: [4, 4] },
@@ -420,14 +592,42 @@ const graphChoices = [
   },
 ];
 
-const Dashboard = () => {
+const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMapOpened }) => {
   const [selectedGraphId, setSelectedGraphId] = useState(graphChoices[0].id);
-  const [selectedSeason, setSelectedSeason] = useState(SEASON_OPTIONS[0]);
-  const [selectedWeek, setSelectedWeek] = useState('37');
+  const [selectedSeason, setSelectedSeason] = useState(SEASON_OPTIONS[0]); // '24/25' - 실제 데이터가 있는 절기
+  const [selectedWeek, setSelectedWeek] = useState('37'); // 2024년 37주 - 실제 데이터가 있는 주차
+  const [selectedAgeGroup, setSelectedAgeGroup] = useState(null); // 선택된 연령대 (null이면 전체 평균)
+  const [viewMode, setViewMode] = useState('single'); // 'single', 'season', 'ageGroup' - 그래프 표시 모드
+  const [selectedSeasons, setSelectedSeasons] = useState(['24/25', '25/26']); // 절기별 비교용 선택된 절기들
+  const [selectedAgeGroups, setSelectedAgeGroups] = useState(['0세', '1-6세', '7-12세', '13-18세', '19-49세', '50-64세', '65세이상']); // 연령대별 비교용 선택된 연령대들
   const [newsDialogOpen, setNewsDialogOpen] = useState(false);
   const [weeklyReportDialogOpen, setWeeklyReportDialogOpen] = useState(false);
   const [influenzaDialogOpen, setInfluenzaDialogOpen] = useState(false);
-  const [hospitalMapDialogOpen, setHospitalMapDialogOpen] = useState(false);
+  const [hospitalSearchOpen, setHospitalSearchOpen] = useState(false);
+
+  // 환경 변수에서 DSID 가져오기
+  const defaultDSID = process.env.REACT_APP_DSID || 'ds_0101';
+
+  // API 데이터 가져오기 (커스텀 훅 사용)
+  const { influenzaData, loading, error: apiError } = useInfluenzaData(
+    selectedSeason,
+    selectedWeek,
+    defaultDSID
+  );
+
+  // 에러 상태 관리 (사용자가 닫을 수 있도록)
+  const [error, setError] = useState(null);
+
+  // API 에러가 변경되면 로컬 error state 업데이트
+  useEffect(() => {
+    if (apiError) {
+      setError(apiError);
+    }
+  }, [apiError]);
+
+  // 유행단계 및 주간 요약 데이터 상태 (향후 API 연동 예정)
+  const [stageData, setStageData] = useState(null);
+  const [weeklySummaryData, setWeeklySummaryData] = useState(null);
 
   // 유행단계별 이모지 및 정보 반환 함수
   const getInfluenzaStageInfo = (value) => {
@@ -455,14 +655,15 @@ const Dashboard = () => {
     }
   };
 
-  // 주간 유행단계 데이터 (실제로는 API에서 가져와야 함) - 현재 제외
-  const weeklyStageData = [
+  // 주간 유행단계 데이터 (API에서 가져온 데이터 사용, 없으면 기본값)
+  const weeklyStageData = stageData?.weekly || [
     { week: '1주전', value: 4.9 },
     { week: '2주전', value: 4.6 },
     { week: '4주전', value: 3.1 },
   ];
 
-  const currentStageInfo = getInfluenzaStageInfo(9.5); // 테스트용으로 화남 단계로 설정
+  const currentStageValue = stageData?.current || 9.5; // API에서 가져온 값 또는 기본값
+  const currentStageInfo = getInfluenzaStageInfo(currentStageValue);
 
   // Feature Importance 데이터
   const featureImportanceData = [
@@ -484,8 +685,8 @@ const Dashboard = () => {
     (currentFeaturePage + 1) * itemsPerPage
   );
 
-  // 주간 지표 요약 데이터
-  const weeklySummaryMetrics = [
+  // 주간 지표 요약 데이터 (API에서 가져온 데이터 사용, 없으면 기본값)
+  const weeklySummaryMetrics = weeklySummaryData || [
     {
       title: '주간 신규 환자',
       value: '324명',
@@ -536,77 +737,164 @@ const Dashboard = () => {
     setInfluenzaDialogOpen(false);
   };
 
-  const handleHospitalMapDialogOpen = () => {
-    setHospitalMapDialogOpen(true);
+  const handleHospitalSearchOpen = () => {
+    setHospitalSearchOpen(true);
   };
 
-  const handleHospitalMapDialogClose = () => {
-    setHospitalMapDialogOpen(false);
+  const handleHospitalSearchClose = () => {
+    setHospitalSearchOpen(false);
   };
 
-  // 카카오맵 초기화
+  // API 데이터 로딩은 useInfluenzaData 훅에서 처리됨
+
+  // 유행단계 데이터 로딩 (현재는 사용하지 않음)
   useEffect(() => {
-    if (hospitalMapDialogOpen) {
-      // 카카오맵 API 로드 확인 및 지도 초기화
-      const initializeMap = () => {
-        const container = document.getElementById('hospital-map');
-        if (container && window.kakao && window.kakao.maps) {
-          try {
-            const options = {
-              center: new window.kakao.maps.LatLng(37.5665, 126.9780), // 서울 중심
-              level: 5
-            };
-            
-            const map = new window.kakao.maps.Map(container, options);
-            
-            // 병원 마커 데이터
-            const hospitals = [
-              { name: '서울대학교병원', lat: 37.5799, lng: 126.9988 },
-              { name: '삼성서울병원', lat: 37.4881, lng: 127.0857 },
-              { name: '세브란스병원', lat: 37.5626, lng: 126.9397 },
-              { name: '서울아산병원', lat: 37.5262, lng: 127.1085 }
-            ];
-            
-            // 병원 마커 생성
-            hospitals.forEach(hospital => {
-              const markerPosition = new window.kakao.maps.LatLng(hospital.lat, hospital.lng);
-              const marker = new window.kakao.maps.Marker({
-                position: markerPosition,
-                map: map
-              });
-              
-              // 인포윈도우 생성
-              const infowindow = new window.kakao.maps.InfoWindow({
-                content: `<div style="padding:5px;font-size:12px;width:80px;text-align:center;">${hospital.name}</div>`
-              });
-              
-              // 마커 클릭 이벤트
-              window.kakao.maps.event.addListener(marker, 'click', () => {
-                infowindow.open(map, marker);
-              });
-            });
-            
-            console.log('카카오맵 초기화 완료');
-          } catch (error) {
-            console.error('카카오맵 초기화 오류:', error);
-          }
-        } else {
-          console.log('카카오맵 API 또는 컨테이너를 찾을 수 없음');
+    // TODO: 실제 API 연동 시 주석 해제
+    /*
+    const fetchStageData = async () => {
+      try {
+        const data = await getInfluenzaStage();
+        if (data) {
+          setStageData(data);
         }
-      };
+      } catch (err) {
+        console.warn('유행단계 데이터 로딩 실패:', err);
+      }
+    };
 
-      // 다이얼로그가 완전히 렌더링된 후 지도 초기화
-      const timer = setTimeout(initializeMap, 300);
-      
-      return () => clearTimeout(timer);
+    fetchStageData();
+    */
+  }, []);
+
+  // 주간 지표 요약 데이터 로딩 (현재는 사용하지 않음)
+  useEffect(() => {
+    // TODO: 실제 API 연동 시 주석 해제
+    /*
+    const fetchWeeklySummary = async () => {
+      try {
+        const data = await getWeeklySummary();
+        if (data) {
+          setWeeklySummaryData(data);
+        }
+      } catch (err) {
+        console.warn('주간 지표 요약 데이터 로딩 실패:', err);
+      }
+    };
+
+    fetchWeeklySummary();
+    */
+  }, []);
+
+  // 사이드바 메뉴에서 병원 찾기 클릭 시 다이얼로그 열기
+  useEffect(() => {
+    if (shouldOpenHospitalMap) {
+      setHospitalSearchOpen(true);
+      if (onHospitalMapOpened) {
+        onHospitalMapOpened();
+      }
     }
-  }, [hospitalMapDialogOpen]);
+  }, [shouldOpenHospitalMap, onHospitalMapOpened]);
 
 
+
+  // API 데이터로 graphChoices 업데이트
+  const updatedGraphChoices = useMemo(() => {
+    console.log('🔄 [Dashboard] updatedGraphChoices 계산 시작');
+    console.log('🔄 [Dashboard] influenzaData:', influenzaData);
+    console.log('🔄 [Dashboard] selectedAgeGroup:', selectedAgeGroup);
+    
+    return graphChoices.map(choice => {
+      const dataKey = choice.id;
+      const apiData = influenzaData[dataKey];
+      
+      console.log(`📊 [Dashboard] 그래프 ${dataKey} 처리:`, {
+        hasApiData: !!apiData,
+        hasWeeks: !!(apiData?.weeks),
+        hasValues: !!(apiData?.values),
+        hasAgeGroups: !!(apiData?.ageGroups),
+        weeksCount: apiData?.weeks?.length,
+        valuesCount: apiData?.values?.length,
+        ageGroups: apiData?.ageGroups ? Object.keys(apiData.ageGroups) : [],
+      });
+      
+      if (apiData && apiData.weeks && apiData.values) {
+        // ILI 데이터이고 연령대 필터가 선택된 경우
+        let displayValues = apiData.values;
+        let displayWeeks = apiData.weeks;
+        
+        if (dataKey === 'ili' && selectedAgeGroup && apiData.ageGroups && apiData.ageGroups[selectedAgeGroup]) {
+          // 선택된 연령대의 데이터 사용
+          displayValues = apiData.ageGroups[selectedAgeGroup].values;
+          displayWeeks = apiData.ageGroups[selectedAgeGroup].weeks;
+          console.log(`✅ [Dashboard] API 데이터 사용 (연령대 필터: ${selectedAgeGroup}): ${dataKey}`, {
+            weeks: displayWeeks,
+            values: displayValues,
+            weeksLength: displayWeeks?.length,
+            valuesLength: displayValues?.length,
+            source: 'API'
+          });
+        } else {
+          console.log(`✅ [Dashboard] API 데이터 사용: ${dataKey}`, {
+            weeks: displayWeeks,
+            values: displayValues,
+            weeksLength: displayWeeks?.length,
+            valuesLength: displayValues?.length,
+            source: 'API'
+          });
+        }
+        
+        // 주차 정렬 (숫자 기준) - 안전하게 처리
+        const sortedWeeks = [...displayWeeks].sort((a, b) => {
+          const weekAStr = a.toString().replace(/주/g, '').trim();
+          const weekBStr = b.toString().replace(/주/g, '').trim();
+          const weekA = parseInt(weekAStr) || 0;
+          const weekB = parseInt(weekBStr) || 0;
+          
+          if (isNaN(weekA) || isNaN(weekB)) {
+            console.warn(`⚠️ [Dashboard] 주차 파싱 실패: "${a}" -> ${weekA}, "${b}" -> ${weekB}`);
+            return a.toString().localeCompare(b.toString());
+          }
+          
+          return weekA - weekB;
+        });
+        
+        // 정렬된 주차에 맞춰 값도 재정렬
+        const sortedValues = sortedWeeks.map(week => {
+          const index = displayWeeks.indexOf(week);
+          if (index === -1) {
+            console.warn(`⚠️ [Dashboard] 주차 "${week}"를 원본 배열에서 찾을 수 없음`);
+            return null;
+          }
+          return displayValues[index];
+        });
+        
+        console.log(`📊 [Dashboard] 정렬 전/후 비교:`, {
+          before: { weeks: displayWeeks, values: displayValues },
+          after: { weeks: sortedWeeks, values: sortedValues },
+          sortedWeeksLength: sortedWeeks.length,
+          sortedValuesLength: sortedValues.length,
+        });
+        
+        return {
+          ...choice,
+          weeks: sortedWeeks,
+          values: sortedValues,
+          data: createLineConfig(sortedWeeks, sortedValues),
+        };
+      } else {
+        console.log(`⚠️ [Dashboard] 더미 데이터 사용: ${dataKey}`, {
+          weeks: choice.weeks,
+          values: choice.values,
+          source: '더미 데이터'
+        });
+      }
+      return choice;
+    });
+  }, [influenzaData, selectedAgeGroup]);
 
   const selectedGraph = useMemo(
-    () => graphChoices.find(graph => graph.id === selectedGraphId) ?? graphChoices[0],
-    [selectedGraphId],
+    () => updatedGraphChoices.find(graph => graph.id === selectedGraphId) ?? updatedGraphChoices[0],
+    [selectedGraphId, updatedGraphChoices],
   );
 
   const visitorOptions = useMemo(
@@ -642,8 +930,39 @@ const Dashboard = () => {
   }, [selectedGraph]);
 
   return (
-    <Box sx={{ backgroundColor: '#f8fafc', minHeight: '100vh', color: '#1f2937', py: 4 }}>
+    <Box sx={{ 
+      backgroundColor: '#f8fafc', 
+      minHeight: '100vh', 
+      color: '#1f2937', 
+      py: 4,
+      marginLeft: isOpen ? '240px' : '64px',
+      marginTop: '60px',
+      transition: 'margin-left 0.3s ease',
+    }}>
       <Container maxWidth="xl">
+        {/* 로딩 상태 표시 */}
+        {loading && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 4 }}>
+            <CircularProgress sx={{ mr: 2 }} />
+            <Typography variant="body1" sx={{ color: '#6b7280' }}>
+              데이터를 불러오는 중...
+            </Typography>
+          </Box>
+        )}
+
+        {/* 에러 상태 표시 */}
+        {error && (
+          <Alert 
+            severity="info" 
+            sx={{ mb: 3 }}
+            onClose={() => setError(null)}
+          >
+            {error}
+            <Box sx={{ mt: 1, fontSize: '0.875rem', color: '#6b7280' }}>
+              브라우저 개발자 도구(F12)의 콘솔에서 자세한 에러 정보를 확인할 수 있습니다.
+            </Box>
+          </Alert>
+        )}
         <Box
           sx={{
             borderRadius: 4,
@@ -654,61 +973,6 @@ const Dashboard = () => {
             overflow: 'hidden',
           }}
         >
-          <Box
-            sx={{
-              width: 240,
-              backgroundColor: 'rgba(248, 250, 252, 0.95)',
-              borderRight: '1px solid rgba(203, 213, 225, 0.3)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 4,
-              px: 3,
-              py: 4,
-            }}
-          >
-            <Box>
-              <Typography variant="h6" sx={{ fontWeight: 700, color: '#1f2937' }}>Cho Lab</Typography>
-            </Box>
-            <List sx={{ p: 0 }}>
-              {navItems.map((item, index) => (
-                <ListItemButton
-                  key={item}
-                  onClick={() => {
-                    if (item === '감염병 뉴스') {
-                      handleNewsDialogOpen();
-                    } else if (item === '주간 발생 동향') {
-                      handleWeeklyReportDialogOpen();
-                      return;
-                    } else if (item === '인플루엔자란?') {
-                      handleInfluenzaDialogOpen();
-                      return;
-                    } else if (item === '근처 병원찾기') {
-                      handleHospitalMapDialogOpen();
-                      return;
-                    }
-                  }}
-                  sx={{
-                    color: index === 0 ? '#0f172a' : '#374151',
-                    mb: 1,
-                    borderRadius: 2,
-                    backgroundColor: index === 0 ? '#5eead4' : 'transparent',
-                    '&:hover': {
-                      backgroundColor: index === 0 ? '#5eead4' : 'rgba(94, 234, 212, 0.08)',
-                      color: '#1f2937',
-                    },
-                  }}
-                >
-                  <ListItemText primary={item} primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />
-                  {index === 0 && <FiChevronRight color="#0f172a" />}
-                </ListItemButton>
-              ))}
-            </List>
-            <Box sx={{ mt: 'auto', p: 2.5, borderRadius: 3, backgroundColor: 'rgba(241, 245, 249, 0.8)' }}>
-              <Typography variant="body2" sx={{ fontWeight: 600, color: '#1f2937' }}>매주 18시 이후 업데이트</Typography>
-              <Typography variant="caption" sx={{ color: 'rgba(107, 114, 128, 0.7)' }}>전주 토-일 자료 수집</Typography>
-            </Box>
-          </Box>
-
           <Box sx={{ flex: 1, p: { xs: 3, md: 5 }, display: 'flex', flexDirection: 'column', gap: 4 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 3 }}>
               <Typography
@@ -721,76 +985,6 @@ const Dashboard = () => {
               >
                 Influenza Overview
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
-                  <Typography variant="body2" sx={{ color: '#4b5563', fontWeight: 500 }}>
-                    절기 선택
-                  </Typography>
-                  <FormControl
-                    size="small"
-                    sx={{
-                      minWidth: 120,
-                      backgroundColor: 'rgba(255, 255, 255, 0.8)',
-                      borderRadius: 1.5,
-                      '& .MuiOutlinedInput-root': {
-                        '& fieldset': { border: '1px solid rgba(203, 213, 225, 0.5)' },
-                        '&:hover fieldset': { borderColor: 'rgba(59, 130, 246, 0.4)' },
-                        '&.Mui-focused fieldset': { borderColor: '#3b82f6' },
-                      },
-                    }}
-                  >
-                    <Select
-                      value={selectedSeason}
-                      onChange={event => setSelectedSeason(event.target.value)}
-                      sx={{
-                        color: '#374151',
-                        fontSize: '0.875rem',
-                        '& .MuiSvgIcon-root': { color: '#374151' },
-                      }}
-                    >
-                      {SEASON_OPTIONS.map(option => (
-                        <MenuItem key={option} value={option}>
-                          {option}절기
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
-                  <Typography variant="body2" sx={{ color: '#374151', fontWeight: 500 }}>
-                    주차 선택
-                  </Typography>
-                  <FormControl
-                    size="small"
-                    sx={{
-                      minWidth: 100,
-                      backgroundColor: 'rgba(248, 250, 252, 0.9)',
-                      borderRadius: 1.5,
-                      '& .MuiOutlinedInput-root': {
-                        '& fieldset': { border: '1px solid rgba(203, 213, 225, 0.8)' },
-                        '&:hover fieldset': { borderColor: 'rgba(94, 234, 212, 0.4)' },
-                        '&.Mui-focused fieldset': { borderColor: '#38bdf8' },
-                      },
-                    }}
-                  >
-                    <Select
-                      value={selectedWeek}
-                      onChange={event => setSelectedWeek(event.target.value)}
-                      sx={{
-                        color: '#374151',
-                        fontSize: '0.875rem',
-                        '& .MuiSvgIcon-root': { color: '#374151' },
-                      }}
-                    >
-                      {WEEK_OPTIONS.map(week => (
-                        <MenuItem key={week} value={week}>
-                          {week}주
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </Box>
-              </Box>
             </Box>
 
             <Grid container spacing={4}>
@@ -909,66 +1103,229 @@ const Dashboard = () => {
                       ) : null}
                     </Box>
                     
-                    {/* 그래프 선택 드롭다운 */}
-                    <FormControl sx={{ minWidth: 120 }}>
-                      <Select
-                        value={selectedGraphId}
-                        onChange={(e) => setSelectedGraphId(e.target.value)}
-                        displayEmpty
-                        renderValue={(selected) => {
-                          const selectedOption = graphChoices.find(option => option.id === selected);
-                          return selectedOption ? selectedOption.shorthand : '';
-                        }}
-                        sx={{
-                          color: '#1f2937',
-                          backgroundColor: 'rgba(248, 250, 252, 0.9)',
-                          borderRadius: 2,
-                          '& .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'rgba(148, 163, 184, 0.3)',
-                          },
-                          '& .MuiSvgIcon-root': {
-                            color: '#374151',
-                          },
-                          '&:hover .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'rgba(56, 189, 248, 0.5)',
-                          },
-                          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                            borderColor: '#38bdf8',
-                          },
-                        }}
-                        MenuProps={{
-                          PaperProps: {
-                            sx: {
-                              backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                              border: '1px solid rgba(203, 213, 225, 0.8)',
-                              borderRadius: 2,
-                            },
-                          },
-                        }}
-                      >
-                        {graphChoices.map((option) => (
-                          <MenuItem 
-                            key={option.id} 
-                            value={option.id}
-                            sx={{ 
-                              color: '#1f2937',
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                      {/* 절기별/연령대별 버튼 (ILI 데이터일 때만 표시) */}
+                      {selectedGraphId === 'ili' && (
+                        <ButtonGroup variant="outlined" size="small">
+                          <Button
+                            onClick={() => setViewMode('season')}
+                            sx={{
+                              backgroundColor: viewMode === 'season' ? '#3b82f6' : 'transparent',
+                              color: viewMode === 'season' ? '#fff' : '#374151',
+                              borderColor: '#3b82f6',
                               '&:hover': {
-                                backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                              },
-                              '&.Mui-selected': {
-                                backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                                backgroundColor: viewMode === 'season' ? '#2563eb' : 'rgba(59, 130, 246, 0.1)',
+                                borderColor: '#2563eb',
                               },
                             }}
                           >
-                            <Box>
-                              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                                {option.shorthand}: {option.label}
-                              </Typography>
-                            </Box>
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
+                            절기별
+                          </Button>
+                          <Button
+                            onClick={() => setViewMode('ageGroup')}
+                            sx={{
+                              backgroundColor: viewMode === 'ageGroup' ? '#3b82f6' : 'transparent',
+                              color: viewMode === 'ageGroup' ? '#fff' : '#374151',
+                              borderColor: '#3b82f6',
+                              '&:hover': {
+                                backgroundColor: viewMode === 'ageGroup' ? '#2563eb' : 'rgba(59, 130, 246, 0.1)',
+                                borderColor: '#2563eb',
+                              },
+                            }}
+                          >
+                            연령대별
+                          </Button>
+                        </ButtonGroup>
+                      )}
+                      
+                      {/* 그래프 선택 드롭다운 */}
+                      <FormControl sx={{ minWidth: 120 }}>
+                        <Select
+                          value={selectedGraphId}
+                          onChange={(e) => setSelectedGraphId(e.target.value)}
+                          displayEmpty
+                          renderValue={(selected) => {
+                            const selectedOption = graphChoices.find(option => option.id === selected);
+                            return selectedOption ? selectedOption.shorthand : '';
+                          }}
+                          sx={{
+                            color: '#1f2937',
+                            backgroundColor: 'rgba(248, 250, 252, 0.9)',
+                            borderRadius: 2,
+                            '& .MuiOutlinedInput-notchedOutline': {
+                              borderColor: 'rgba(148, 163, 184, 0.3)',
+                            },
+                            '& .MuiSvgIcon-root': {
+                              color: '#374151',
+                            },
+                            '&:hover .MuiOutlinedInput-notchedOutline': {
+                              borderColor: 'rgba(56, 189, 248, 0.5)',
+                            },
+                            '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                              borderColor: '#38bdf8',
+                            },
+                          }}
+                          MenuProps={{
+                            PaperProps: {
+                              sx: {
+                                backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                                border: '1px solid rgba(203, 213, 225, 0.8)',
+                                borderRadius: 2,
+                              },
+                            },
+                          }}
+                        >
+                          {graphChoices.map((option) => (
+                            <MenuItem 
+                              key={option.id} 
+                              value={option.id}
+                              sx={{ 
+                                color: '#1f2937',
+                                '&:hover': {
+                                  backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                                },
+                                '&.Mui-selected': {
+                                  backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                                },
+                              }}
+                            >
+                              <Box>
+                                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                  {option.shorthand}: {option.label}
+                                </Typography>
+                              </Box>
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    </Box>
+                    
+                    {/* 절기별 비교 차트 선택 UI (viewMode가 'season'일 때만 표시) */}
+                    {selectedGraphId === 'ili' && viewMode === 'season' && influenzaData.ili && influenzaData.ili.seasons && (
+                      <Box sx={{ mt: 2, mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                        {Object.keys(influenzaData.ili.seasons)
+                          .sort()
+                          .map((season) => {
+                            const seasonKey = season.replace('절기', '');
+                            return (
+                              <FormControlLabel
+                                key={season}
+                                control={
+                                  <Checkbox
+                                    checked={selectedSeasons.includes(seasonKey)}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setSelectedSeasons([...selectedSeasons, seasonKey]);
+                                      } else {
+                                        setSelectedSeasons(selectedSeasons.filter(s => s !== seasonKey));
+                                      }
+                                    }}
+                                    size="small"
+                                  />
+                                }
+                                label={season}
+                                sx={{ fontSize: '0.875rem' }}
+                              />
+                            );
+                          })}
+                      </Box>
+                    )}
+
+                    {/* 연령대별 비교 차트 선택 UI (viewMode가 'ageGroup'일 때만 표시) */}
+                    {selectedGraphId === 'ili' && viewMode === 'ageGroup' && influenzaData.ili && influenzaData.ili.ageGroups && (
+                      <Box sx={{ mt: 2, mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                        {Object.keys(influenzaData.ili.ageGroups)
+                          .filter(ageGroup => {
+                            const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
+                            return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
+                          })
+                          .sort()
+                          .map((ageGroup) => (
+                            <FormControlLabel
+                              key={ageGroup}
+                              control={
+                                <Checkbox
+                                  checked={selectedAgeGroups.includes(ageGroup)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedAgeGroups([...selectedAgeGroups, ageGroup]);
+                                    } else {
+                                      setSelectedAgeGroups(selectedAgeGroups.filter(a => a !== ageGroup));
+                                    }
+                                  }}
+                                  size="small"
+                                />
+                              }
+                              label={ageGroup}
+                              sx={{ fontSize: '0.875rem' }}
+                            />
+                          ))}
+                      </Box>
+                    )}
+
+                    {/* 연령대별 필터 (단일 모드일 때만 표시) */}
+                    {selectedGraphId === 'ili' && viewMode === 'single' && influenzaData.ili && influenzaData.ili.ageGroups && (
+                      <Paper
+                        elevation={0}
+                        sx={{
+                          p: 2.5,
+                          mt: 2,
+                          backgroundColor: 'rgba(239, 246, 255, 0.8)',
+                          borderRadius: 2,
+                          border: '1px solid rgba(147, 197, 253, 0.5)',
+                        }}
+                      >
+                        <Box sx={{ mb: 1.5 }}>
+                          <Typography variant="body2" sx={{ color: '#1e40af', fontWeight: 600, mb: 0.5 }}>
+                            👥 연령대별 필터
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem' }}>
+                            선택한 절기({selectedSeason})의 연령대별 데이터를 확인할 수 있습니다
+                          </Typography>
+                        </Box>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                          <Chip
+                            label="전체 평균"
+                            onClick={() => setSelectedAgeGroup(null)}
+                            sx={{
+                              backgroundColor: selectedAgeGroup === null ? '#3b82f6' : 'rgba(203, 213, 225, 0.3)',
+                              color: selectedAgeGroup === null ? '#fff' : '#475569',
+                              fontWeight: selectedAgeGroup === null ? 600 : 400,
+                              cursor: 'pointer',
+                              border: selectedAgeGroup === null ? '2px solid #2563eb' : '1px solid rgba(203, 213, 225, 0.5)',
+                              '&:hover': {
+                                backgroundColor: selectedAgeGroup === null ? '#3b82f6' : 'rgba(59, 130, 246, 0.2)',
+                              },
+                            }}
+                          />
+                          {Object.keys(influenzaData.ili.ageGroups)
+                            .filter(ageGroup => {
+                              // 절기 형식 제외 (예: "17/18", "24/25" 등)
+                              const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
+                              // 연령대 형식만 포함 (예: "0세", "1-6세", "65세 이상" 등)
+                              return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
+                            })
+                            .sort()
+                            .map((ageGroup) => (
+                            <Chip
+                              key={ageGroup}
+                              label={ageGroup}
+                              onClick={() => setSelectedAgeGroup(ageGroup)}
+                              sx={{
+                                backgroundColor: selectedAgeGroup === ageGroup ? '#3b82f6' : 'rgba(203, 213, 225, 0.3)',
+                                color: selectedAgeGroup === ageGroup ? '#fff' : '#475569',
+                                fontWeight: selectedAgeGroup === ageGroup ? 600 : 400,
+                                cursor: 'pointer',
+                                border: selectedAgeGroup === ageGroup ? '2px solid #2563eb' : '1px solid rgba(203, 213, 225, 0.5)',
+                                '&:hover': {
+                                  backgroundColor: selectedAgeGroup === ageGroup ? '#3b82f6' : 'rgba(59, 130, 246, 0.2)',
+                                },
+                              }}
+                            />
+                          ))}
+                        </Box>
+                      </Paper>
+                    )}
                   </Box>
 
                   {(!selectedChange?.valueText || !selectedChange?.text) && (
@@ -985,7 +1342,182 @@ const Dashboard = () => {
                     </Typography>
                   )}
                   <Box sx={{ height: 260, mt: 3 }}>
-                    <Line data={selectedGraph.data} options={visitorOptions} />
+                    {selectedGraphId === 'ili' && viewMode === 'season' ? (
+                      // 절기별 비교 차트
+                      (() => {
+                        if (!influenzaData.ili || !influenzaData.ili.seasons) {
+                          return (
+                            <Typography variant="body2" sx={{ color: 'rgba(148, 163, 184, 0.7)', textAlign: 'center', py: 8 }}>
+                              절기별 데이터를 불러오는 중...
+                            </Typography>
+                          );
+                        }
+                        // 절기별 데이터 처리
+                        const seasonKeys = Object.keys(influenzaData.ili.seasons)
+                          .filter(season => selectedSeasons.includes(season.replace('절기', '')))
+                          .sort();
+                        
+                        if (seasonKeys.length === 0) {
+                          return (
+                            <Typography variant="body2" sx={{ color: 'rgba(148, 163, 184, 0.7)', textAlign: 'center', py: 8 }}>
+                              비교할 절기를 선택해주세요.
+                            </Typography>
+                          );
+                        }
+                        
+                        const allWeeks = new Set();
+                        seasonKeys.forEach(season => {
+                          const seasonData = influenzaData.ili.seasons[season];
+                          console.log(`📅 [절기별 차트] 절기 ${season} 데이터:`, {
+                            hasData: !!seasonData,
+                            weeks: seasonData?.weeks,
+                            values: seasonData?.values,
+                            weeksCount: seasonData?.weeks?.length,
+                            valuesCount: seasonData?.values?.length,
+                          });
+                          if (seasonData && seasonData.weeks) {
+                            seasonData.weeks.forEach(week => allWeeks.add(week));
+                          }
+                        });
+                        
+                        console.log('📊 [절기별 차트] 모든 주차 (정렬 전):', Array.from(allWeeks));
+                        
+                        // 절기별 주차 정렬: 36주부터 시작해서 다음 해 35주까지
+                        const sortedWeeks = Array.from(allWeeks).sort((a, b) => sortWeeksBySeason(a, b));
+                        
+                        console.log('📊 [절기별 차트] 정렬된 주차:', sortedWeeks);
+                        
+                        console.log('📊 [절기별 차트] 정렬된 주차:', sortedWeeks);
+                        
+                        const datasets = seasonKeys.map((season, index) => {
+                          const seasonData = influenzaData.ili.seasons[season];
+                          // 절기별 고정 색상 사용
+                          const color = seasonColorMap[season] || seasonColors[index % seasonColors.length];
+                          
+                          console.log(`📊 [절기별 차트] 절기 ${season} 데이터 매핑:`, {
+                            seasonDataWeeks: seasonData?.weeks,
+                            seasonDataValues: seasonData?.values,
+                            sortedWeeks: sortedWeeks,
+                            seasonDataWeeksLength: seasonData?.weeks?.length,
+                            seasonDataValuesLength: seasonData?.values?.length,
+                          });
+                          
+                          const values = sortedWeeks.map(week => {
+                            const weekIndex = seasonData.weeks.indexOf(week);
+                            const value = weekIndex >= 0 ? (seasonData.values[weekIndex] ?? null) : null;
+                            console.log(`  주차 ${week}: weekIndex=${weekIndex}, value=${value}`);
+                            return value;
+                          });
+                          
+                          console.log(`📊 [절기별 차트] 절기 ${season} 최종 values:`, values);
+                          
+                          return {
+                            label: season,
+                            data: values,
+                            borderColor: color.border,
+                            backgroundColor: color.fill,
+                            fill: false,
+                            tension: 0.35,
+                            borderWidth: 2,
+                            pointRadius: 2,
+                            pointBackgroundColor: color.border,
+                            pointBorderColor: '#0f172a',
+                            pointBorderWidth: 1,
+                          };
+                        });
+                        
+                        return (
+                          <Line
+                            data={createComparisonChartConfig(sortedWeeks, datasets)}
+                            options={comparisonChartOptions}
+                          />
+                        );
+                      })()
+                    ) : selectedGraphId === 'ili' && viewMode === 'ageGroup' ? (
+                      // 연령대별 비교 차트
+                      (() => {
+                        if (!influenzaData.ili || !influenzaData.ili.ageGroups) {
+                          return (
+                            <Typography variant="body2" sx={{ color: 'rgba(148, 163, 184, 0.7)', textAlign: 'center', py: 8 }}>
+                              연령대별 데이터를 불러오는 중...
+                            </Typography>
+                          );
+                        }
+                        const ageGroupKeys = Object.keys(influenzaData.ili.ageGroups)
+                          .filter(ageGroup => {
+                            const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
+                            return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
+                          })
+                          .sort()
+                          .filter(ageGroup => selectedAgeGroups.includes(ageGroup));
+                        
+                        if (ageGroupKeys.length === 0) {
+                          return (
+                            <Typography variant="body2" sx={{ color: 'rgba(148, 163, 184, 0.7)', textAlign: 'center', py: 8 }}>
+                              비교할 연령대를 선택해주세요.
+                            </Typography>
+                          );
+                        }
+                        
+                        const allWeeks = new Set();
+                        ageGroupKeys.forEach(ageGroup => {
+                          const ageData = influenzaData.ili.ageGroups[ageGroup];
+                          if (ageData && ageData.weeks) {
+                            ageData.weeks.forEach(week => allWeeks.add(week));
+                          }
+                        });
+                        const sortedWeeks = Array.from(allWeeks).sort((a, b) => {
+                          // "32주" 형식에서 숫자만 추출
+                          const weekAStr = a.toString().replace(/주/g, '').trim();
+                          const weekBStr = b.toString().replace(/주/g, '').trim();
+                          const weekA = parseInt(weekAStr) || 0;
+                          const weekB = parseInt(weekBStr) || 0;
+                          
+                          if (isNaN(weekA) || isNaN(weekB)) {
+                            console.warn(`⚠️ [절기별 차트] 주차 파싱 실패: "${a}" -> ${weekA}, "${b}" -> ${weekB}`);
+                            return a.toString().localeCompare(b.toString());
+                          }
+                          
+                          return weekA - weekB;
+                        });
+                        
+                        console.log('📊 [절기별 차트] 정렬된 주차:', sortedWeeks);
+                        
+                        const datasets = ageGroupKeys.map((ageGroup, index) => {
+                          const ageData = influenzaData.ili.ageGroups[ageGroup];
+                          // 연령대별 고정 색상 사용
+                          const color = ageGroupColorMap[ageGroup] || ageGroupColors[index % ageGroupColors.length];
+                          const values = sortedWeeks.map(week => {
+                            const weekIndex = ageData.weeks.indexOf(week);
+                            return weekIndex >= 0 ? (ageData.values[weekIndex] ?? null) : null;
+                          });
+                          
+                          return {
+                            label: ageGroup,
+                            data: values,
+                            borderColor: color.border,
+                            backgroundColor: color.fill,
+                            fill: false,
+                            tension: 0.35,
+                            borderWidth: 2,
+                            pointRadius: 2,
+                            pointBackgroundColor: color.border,
+                            pointBorderColor: '#0f172a',
+                            pointBorderWidth: 1,
+                          };
+                        });
+                        
+                        return (
+                          <Line
+                            data={createComparisonChartConfig(sortedWeeks, datasets)}
+                            options={comparisonChartOptions}
+                          />
+                        );
+                      })()
+                    ) : (
+                      // 기본 단일 그래프
+                      <Line data={selectedGraph.data} options={visitorOptions} />
+                    )}
                   </Box>
                   <Typography variant="caption" sx={{ color: 'rgba(148, 163, 184, 0.7)', display: 'block', mt: 2 }}>
                     {selectedGraph.description}
@@ -993,6 +1525,74 @@ const Dashboard = () => {
                 </Paper>
               </Grid>
             </Grid>
+
+            {/* 절기별 비교 차트 선택 UI (viewMode가 'season'일 때만 표시) */}
+            {selectedGraphId === 'ili' && viewMode === 'season' && influenzaData.ili && influenzaData.ili.seasons && (
+              <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                {Object.keys(influenzaData.ili.seasons)
+                  .filter(season => {
+                    // 16/17절기는 데이터가 없으므로 제외
+                    const seasonKey = season.replace('절기', '');
+                    return seasonKey !== '16/17';
+                  })
+                  .sort()
+                  .map((season) => {
+                    const seasonKey = season.replace('절기', '');
+                    return (
+                      <FormControlLabel
+                        key={season}
+                        control={
+                          <Checkbox
+                            checked={selectedSeasons.includes(seasonKey)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedSeasons([...selectedSeasons, seasonKey]);
+                              } else {
+                                setSelectedSeasons(selectedSeasons.filter(s => s !== seasonKey));
+                              }
+                            }}
+                            size="small"
+                          />
+                        }
+                        label={season}
+                        sx={{ fontSize: '0.875rem' }}
+                      />
+                    );
+                  })}
+              </Box>
+            )}
+
+            {/* 연령대별 비교 차트 선택 UI (viewMode가 'ageGroup'일 때만 표시) */}
+            {selectedGraphId === 'ili' && viewMode === 'ageGroup' && influenzaData.ili && influenzaData.ili.ageGroups && (
+              <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                {Object.keys(influenzaData.ili.ageGroups)
+                  .filter(ageGroup => {
+                    const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
+                    return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
+                  })
+                  .sort()
+                  .map((ageGroup) => (
+                    <FormControlLabel
+                      key={ageGroup}
+                      control={
+                        <Checkbox
+                          checked={selectedAgeGroups.includes(ageGroup)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedAgeGroups([...selectedAgeGroups, ageGroup]);
+                            } else {
+                              setSelectedAgeGroups(selectedAgeGroups.filter(a => a !== ageGroup));
+                            }
+                          }}
+                          size="small"
+                        />
+                      }
+                      label={ageGroup}
+                      sx={{ fontSize: '0.875rem' }}
+                    />
+                  ))}
+              </Box>
+            )}
 
             <Grid container spacing={4}>
               <Grid item xs={12} md={6}>
@@ -1175,145 +1775,7 @@ const Dashboard = () => {
           </Box>
         </Box>
       </Container>
-      <Dialog
-        open={hospitalMapDialogOpen}
-        onClose={handleHospitalMapDialogClose}
-        maxWidth="md"
-        fullWidth
-        PaperProps={{
-          sx: {
-            backgroundColor: 'rgba(255, 255, 255, 0.98)',
-            borderRadius: 3,
-            border: '1px solid rgba(203, 213, 225, 0.5)',
-            overflow: 'hidden',
-          },
-        }}
-      >
-        <DialogTitle
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            pr: 2.5,
-            pl: 3,
-            py: 2,
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            borderBottom: '1px solid rgba(203, 213, 225, 0.4)',
-          }}
-        >
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#1f2937' }}>
-            근처 병원찾기
-          </Typography>
-          <IconButton onClick={handleHospitalMapDialogClose} sx={{ color: '#6b7280' }}>
-            <FiX size={18} />
-          </IconButton>
-        </DialogTitle>
-        <DialogContent sx={{ backgroundColor: 'rgba(248, 250, 252, 0.95)', p: 3 }}>
-          <Stack spacing={3}>
-            {/* 검색 박스 */}
-            <Box
-              sx={{
-                backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                borderRadius: 3,
-                border: '1px solid rgba(203, 213, 225, 0.8)',
-                p: 3,
-              }}
-            >
-              <Typography variant="body2" sx={{ color: '#1f2937', fontWeight: 600, mb: 2 }}>
-                지역을 입력하여 병원을 검색하세요
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                <Box
-                  component="input"
-                  type="text"
-                  placeholder="지역명을 입력하세요 (예: 강남구, 서초구)"
-                  sx={{
-                    flex: 1,
-                    p: 1.5,
-                    border: '1px solid rgba(203, 213, 225, 0.8)',
-                    borderRadius: 2,
-                    fontSize: '14px',
-                    color: '#1f2937',
-                    backgroundColor: 'rgba(248, 250, 252, 0.9)',
-                    '&:focus': {
-                      outline: 'none',
-                      borderColor: '#38bdf8',
-                    },
-                  }}
-                />
-                <Box
-                  component="button"
-                  sx={{
-                    px: 3,
-                    py: 1.5,
-                    backgroundColor: '#38bdf8',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: 2,
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                    fontSize: '14px',
-                    '&:hover': {
-                      backgroundColor: '#0ea5e9',
-                    },
-                  }}
-                >
-                  검색
-                </Box>
-              </Box>
-            </Box>
-
-            {/* 카카오맵 */}
-            <Box
-              sx={{
-                backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                borderRadius: 3,
-                border: '1px solid rgba(203, 213, 225, 0.8)',
-                overflow: 'hidden',
-              }}
-            >
-              <Typography variant="subtitle2" sx={{ color: '#1f2937', fontWeight: 600, p: 2, borderBottom: '1px solid rgba(203, 213, 225, 0.4)' }}>
-                주요 병원 위치
-              </Typography>
-              
-              <Box
-                id="hospital-map"
-                sx={{
-                  width: '100%',
-                  height: '400px',
-                  backgroundColor: '#f8fafc',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  position: 'relative',
-                }}
-              >
-                {/* 지도 로딩 중 또는 오류 시 표시될 내용 */}
-                <Box
-                  sx={{
-                    textAlign: 'center',
-                    color: '#6b7280',
-                    position: 'absolute',
-                    zIndex: 1,
-                  }}
-                >
-                  <Typography variant="body2" sx={{ mb: 2 }}>
-                    지도를 불러오는 중입니다...
-                  </Typography>
-                  <Typography variant="caption">
-                    지도가 표시되지 않으면 아래 버튼을 이용해주세요
-                  </Typography>
-                </Box>
-              </Box>
-              
-              <Typography variant="caption" sx={{ display: 'block', p: 2, color: '#6b7280', textAlign: 'center' }}>
-                마커를 클릭하면 병원 정보를 확인할 수 있습니다
-              </Typography>
-            </Box>
-
-          </Stack>
-        </DialogContent>
-      </Dialog>
+      <HospitalSearch open={hospitalSearchOpen} onClose={handleHospitalSearchClose} />
       <Dialog
         open={influenzaDialogOpen}
         onClose={handleInfluenzaDialogClose}

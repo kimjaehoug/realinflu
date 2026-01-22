@@ -1,51 +1,67 @@
 import React from 'react';
-import { AppBar, Toolbar, Typography, Box, Container } from '@mui/material';
+import { Box, Typography, IconButton } from '@mui/material';
+import { FiUser, FiChevronDown } from 'react-icons/fi';
 
-const Header = () => {
+const Header = ({ isOpen }) => {
   return (
-    <AppBar 
-      position="static" 
-      elevation={0}
-      sx={{ 
-        backgroundColor: '#1a202c',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+    <Box
+      sx={{
+        height: 60,
+        backgroundColor: '#ffffff',
+        borderBottom: '1px solid rgba(0, 0, 0, 0.1)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        px: 3,
+        position: 'fixed',
+        top: 0,
+        left: isOpen ? 240 : 64,
+        right: 0,
+        zIndex: 999,
+        transition: 'left 0.3s ease',
       }}
     >
-      <Container maxWidth="xl">
-        <Toolbar disableGutters sx={{ py: 2, minHeight: '80px !important' }}>
-          <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-              <Typography
-                variant="h5"
-                component="div"
-                sx={{
-                  fontWeight: 700,
-                  color: '#4fd1c7',
-                  fontSize: '1.8rem',
-                  mr: 3,
-                  fontFamily: 'Pretendard',
-                }}
-              >
-                Influenza
-              </Typography>
-              <Typography
-                variant="h4"
-                component="div"
-                sx={{
-                  fontWeight: 700,
-                  color: 'white',
-                  fontSize: '2.125rem',
-                  fontFamily: 'Pretendard',
-                }}
-              >
-                주요 발생 현황
-              </Typography>
-            </Box>
-
-          </Box>
-        </Toolbar>
-      </Container>
-    </AppBar>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          cursor: 'pointer',
+        }}
+      >
+        <Box
+          sx={{
+            width: 32,
+            height: 32,
+            borderRadius: '50%',
+            backgroundColor: '#e5e7eb',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <FiUser size={18} color="#6b7280" />
+        </Box>
+        <Typography
+          variant="body1"
+          sx={{
+            color: '#1f2937',
+            fontWeight: 500,
+            fontSize: '0.9rem',
+          }}
+        >
+          Admin
+        </Typography>
+        <IconButton
+          sx={{
+            p: 0,
+            color: '#6b7280',
+          }}
+        >
+          <FiChevronDown size={16} />
+        </IconButton>
+      </Box>
+    </Box>
   );
 };
 

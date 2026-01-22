@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
+import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import Footer from './components/Footer';
@@ -55,13 +56,42 @@ const theme = createTheme({
 });
 
 function App() {
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [activeMenuId, setActiveMenuId] = useState('dashboard');
+  const [shouldOpenHospitalMap, setShouldOpenHospitalMap] = useState(false);
+
+  const toggleSidebar = () => {
+    setSidebarOpen(!sidebarOpen);
+  };
+
+  const handleMenuClick = (menuId) => {
+    setActiveMenuId(menuId);
+    if (menuId === 'hospital') {
+      setShouldOpenHospitalMap(true);
+    }
+  };
+
+  const handleHospitalMapOpened = () => {
+    setShouldOpenHospitalMap(false);
+  };
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <div className="App">
-        <Header />
-        <Dashboard />
-        <Footer />
+        <Sidebar 
+          isOpen={sidebarOpen} 
+          onToggle={toggleSidebar}
+          onMenuClick={handleMenuClick}
+          activeMenuId={activeMenuId}
+        />
+        <Header isOpen={sidebarOpen} />
+        <Dashboard 
+          isOpen={sidebarOpen}
+          shouldOpenHospitalMap={shouldOpenHospitalMap}
+          onHospitalMapOpened={handleHospitalMapOpened}
+        />
+        <Footer isOpen={sidebarOpen} />
       </div>
     </ThemeProvider>
   );

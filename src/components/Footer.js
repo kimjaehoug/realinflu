@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Container, Typography } from '@mui/material';
 
-const Footer = () => {
+const Footer = ({ isOpen = true }) => {
   return (
     <Box
       component="footer"
@@ -10,6 +10,8 @@ const Footer = () => {
         borderTop: '1px solid rgba(255, 255, 255, 0.1)',
         mt: 'auto',
         py: 2,
+        marginLeft: isOpen ? '240px' : '64px',
+        transition: 'margin-left 0.3s ease',
       }}
     >
       <Container maxWidth="xl">
