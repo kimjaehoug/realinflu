@@ -1,11 +1,8 @@
 import axios from 'axios';
 import { getAccessToken } from './auth';
 
-// 개발 환경에서는 프록시 사용, 프로덕션에서는 직접 URL 사용
-const useProxy = process.env.NODE_ENV === 'development';
-const API_BASE_URL = useProxy 
-  ? '/api-proxy/data/api/v1'
-  : (process.env.REACT_APP_API_URL || 'http://211.238.12.60:8084/data/api/v1');
+// 직접 URL 사용 (211.238.12.60:8084)
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://211.238.12.60:8084/data/api/v1';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,

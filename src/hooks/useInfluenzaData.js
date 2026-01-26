@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { getETLDataByDateRange } from '../api/etlDataApi';
+import { getETLDataByDateRange, getETLDataBySeason, getETLDataByOrigin } from '../api/etlDataApi';
 import { getDateRangeFromSeason } from '../utils/dateUtils';
 import { processETLData } from '../utils/dataProcessors';
 import { loadHistoricalCSVData, convertCSVToETLFormat } from '../utils/csvDataLoader';
+import { sortWeeksBySeason } from '../utils/seasonUtils';
 
 // 기본 더미 데이터
 const defaultIliWeeks = ['37주', '38주', '39주', '40주', '41주', '42주', '43주', '44주'];
@@ -45,168 +46,230 @@ export const useInfluenzaData = (selectedSeason, selectedWeek, dsid = 'ds_0101')
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    console.log('🔄 [useInfluenzaData] useEffect 실행 - 절기:', selectedSeason, '주차:', selectedWeek);
+    
     const fetchInfluenzaData = async () => {
+      console.log(`🚀 [${selectedSeason}절기] 데이터 로드 시작`);
+      
       setLoading(true);
       setError(null);
 
       try {
-        // 1. CSV 데이터 로드 (2017년 36주 ~ 2025년 47주)
-        console.log('📂 [useInfluenzaData] CSV 데이터 로드 시작 (2017년 36주 ~ 2025년 47주)');
+        // 25/26절기인지 확인 (최신 절기는 API에서만 가져옴)
+        const isLatestSeason = selectedSeason === '25/26';
+        
+        // 1. CSV 데이터 로드 (25/26절기가 아닌 경우만)
+        let csvETLData = [];
+        
+        if (!isLatestSeason) {
+          // 25/26절기가 아닌 경우에만 CSV 데이터 로드
         const csvData = await loadHistoricalCSVData(dsid);
-        const csvETLData = convertCSVToETLFormat(csvData);
-        console.log('📂 [useInfluenzaData] CSV 데이터 변환 완료:', {
-          원본건수: csvData.length,
-          변환건수: csvETLData.length,
-          샘플: csvETLData.slice(0, 2),
-        });
-        
-        // 2. API 데이터 가져오기 (2025년 48주 ~ 현재)
-        console.log('📡 [useInfluenzaData] API 데이터 로드 시작 (2025년 48주 ~ 현재)');
-        const dateRange = getDateRangeFromSeason(selectedSeason, selectedWeek);
-        // 2025년 48주부터 시작하도록 날짜 범위 조정
-        const apiStartDate = '2025-11-25'; // 2025년 48주 시작일 (대략)
-        const apiEndDate = dateRange.to;
-        console.log('📡 [useInfluenzaData] API 호출:', { dsid, from: apiStartDate, to: apiEndDate });
-        
-        let apiRawData = [];
-        try {
-          const apiData = await getETLDataByDateRange(dsid, apiStartDate, apiEndDate);
-          console.log('📡 [useInfluenzaData] API 응답:', JSON.stringify(apiData, null, 2));
+          csvETLData = convertCSVToETLFormat(csvData);
           
-          // API 응답 데이터 파싱
-          apiRawData = apiData?.body?.data || apiData?.data || apiData;
-          
-          // 2025년 48주 이상의 데이터만 필터링 (API 응답에 47주 이하 데이터가 포함될 수 있음)
-          if (Array.isArray(apiRawData)) {
-            const beforeFilter = apiRawData.length;
-            apiRawData = apiRawData.filter(item => {
+          // 해당 절기의 데이터만 필터링
+          const [year1, year2] = selectedSeason.split('/').map(y => parseInt('20' + y));
+          csvETLData = csvETLData.filter(item => {
               try {
                 const parsedData = JSON.parse(item.parsedData || '[]');
                 if (Array.isArray(parsedData) && parsedData.length > 0) {
                   const firstRow = parsedData[0];
                   const year = parseInt(firstRow['연도'] || firstRow['﻿연도'] || '0');
                   const week = parseInt(firstRow['주차'] || '0');
-                  // 2025년 48주 이상만 포함
-                  return year === 2025 && week >= 48;
+                
+                // 절기 범위: XX년 36주 ~ YY년 35주
+                if (year === year1 && week >= 36) return true;
+                if (year === year2 && week <= 35) return true;
+                return false;
                 }
               } catch (e) {
-                return true; // 파싱 실패 시 포함
+              return false;
               }
-              return true;
+            return false;
             });
-            console.log(`📡 [useInfluenzaData] API 데이터 필터링: ${beforeFilter}건 -> ${apiRawData.length}건 (2025년 48주 이상)`);
-          }
-          
-          console.log('📡 [useInfluenzaData] API 데이터 파싱 완료 (2025년 48주 이상 필터링):', {
-            타입: typeof apiRawData,
-            isArray: Array.isArray(apiRawData),
-            length: apiRawData?.length,
-            샘플: Array.isArray(apiRawData) ? apiRawData.slice(0, 2) : null,
-          });
-        } catch (apiError) {
-          console.warn('📡 [useInfluenzaData] API 데이터 로드 실패 (CSV 데이터만 사용):', apiError);
-          apiRawData = [];
+          console.log(`📂 [${selectedSeason}절기] CSV 데이터 필터링 완료: ${csvETLData.length}건`);
+        } else {
+          // 25/26절기는 CSV 데이터 사용 안 함
+          console.log(`📂 [${selectedSeason}절기] CSV 데이터 사용 안 함 (API만 사용)`);
         }
         
-        // 3. CSV 데이터와 API 데이터 병합
-        const allRawData = [...csvETLData, ...(Array.isArray(apiRawData) ? apiRawData : [])];
-        console.log('📊 [useInfluenzaData] 데이터 병합 완료:', {
-          CSV건수: csvETLData.length,
-          API건수: Array.isArray(apiRawData) ? apiRawData.length : 0,
-          전체건수: allRawData.length,
-        });
+        // 2. API 데이터 가져오기 (25/26절기만)
+        let apiRawData = [];
+        
+        if (isLatestSeason) {
+          // 25/26절기만 origin별로 API 요청
+          try {
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log(`📡 [${selectedSeason}절기] origin별 API 요청 시작`);
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            
+            // 먼저 날짜 범위로 origin 목록 가져오기
+            const dateRange = getDateRangeFromSeason(selectedSeason, selectedWeek);
+            console.log(`📅 [${selectedSeason}절기] 날짜 범위 API 요청:`, {
+              dsid,
+              from: '2025-09-01',
+              to: dateRange.to,
+            });
+            
+            const tempApiData = await getETLDataByDateRange(dsid, '2025-09-01', dateRange.to);
+            const tempApiRawData = tempApiData?.body?.data || tempApiData?.data || tempApiData;
+            
+            console.log(`📦 [${selectedSeason}절기] 날짜 범위 API 응답:`, {
+              전체응답: tempApiData,
+              데이터개수: Array.isArray(tempApiRawData) ? tempApiRawData.length : 'N/A',
+              샘플데이터: Array.isArray(tempApiRawData) && tempApiRawData.length > 0 ? tempApiRawData[0] : null,
+            });
+            
+            // origin 목록 추출 (중복 제거)
+            const origins = [];
+            if (Array.isArray(tempApiRawData)) {
+              tempApiRawData.forEach(item => {
+                if (item.origin && !origins.includes(item.origin)) {
+                  origins.push(item.origin);
+                }
+              });
+            }
+            
+            console.log(`📋 [${selectedSeason}절기] 발견된 origin 목록:`, origins);
+            console.log(`📋 [${selectedSeason}절기] origin 개수:`, origins.length);
+            
+            // 각 origin별로 요청
+            for (let i = 0; i < origins.length; i++) {
+              const origin = origins[i];
+              try {
+                console.log(`🔵 [${selectedSeason}절기] origin ${i + 1}/${origins.length} 요청:`, origin);
+                
+                const originData = await getETLDataByOrigin(dsid, origin);
+                const originRawData = originData?.body?.data || originData?.data || originData;
+                
+                console.log(`✅ [${selectedSeason}절기] origin ${i + 1}/${origins.length} 응답:`, {
+                  origin,
+                  전체응답: originData,
+                  데이터개수: Array.isArray(originRawData) ? originRawData.length : 'N/A',
+                  샘플데이터: Array.isArray(originRawData) && originRawData.length > 0 ? originRawData[0] : null,
+                });
+                
+                if (Array.isArray(originRawData)) {
+                  apiRawData.push(...originRawData);
+                } else if (originRawData) {
+                  apiRawData.push(originRawData);
+                }
+              } catch (err) {
+                console.error(`❌ [${selectedSeason}절기] origin ${i + 1}/${origins.length} 요청 실패:`, {
+                  origin,
+                  error: err.message,
+                  response: err.response?.data,
+                });
+              }
+            }
+            
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log(`✅ [${selectedSeason}절기] origin별 API 요청 완료: 총 ${apiRawData.length}건`);
+            console.log(`📊 [${selectedSeason}절기] 수집된 데이터 샘플:`, apiRawData.slice(0, 3));
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        } catch (apiError) {
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.error(`❌ [${selectedSeason}절기] API 요청 실패:`, {
+              error: apiError.message,
+              response: apiError.response?.data,
+              status: apiError.response?.status,
+            });
+            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          apiRawData = [];
+        }
+        } else {
+          // 25/26절기가 아니면 API 사용 안 함 (CSV만 사용)
+          console.log(`📂 [${selectedSeason}절기] CSV 데이터만 사용 (API 사용 안 함)`);
+        }
+        
+        // 3. 데이터 병합 (25/26절기는 API만, 나머지는 CSV만)
+        let allRawData = [];
+        
+        if (isLatestSeason) {
+          // 25/26절기는 API 데이터만 사용
+          allRawData = Array.isArray(apiRawData) ? apiRawData : [];
+          console.log(`📊 [${selectedSeason}절기] API 데이터만 사용: ${allRawData.length}건`);
+        } else {
+          // 다른 절기는 CSV 데이터만 사용
+          allRawData = csvETLData;
+          console.log(`📊 [${selectedSeason}절기] CSV 데이터만 사용: ${allRawData.length}건`);
+        }
         
         if (allRawData && Array.isArray(allRawData)) {
           if (allRawData.length === 0) {
-            // 빈 배열인 경우
-            console.warn('📊 [useInfluenzaData] 데이터가 없습니다. 기본 데이터를 사용합니다.');
-            // 기본 데이터 유지 (이미 useState 초기값으로 설정됨)
+            // 빈 배열인 경우 - 기본 데이터 유지
           } else {
-            // 데이터가 있는 경우 처리
-            console.log(`📊 [useInfluenzaData] 데이터 ${allRawData.length}건 발견. 데이터 처리 중...`);
+            // 데이터 처리
             const processedData = processETLData(allRawData);
             
           if (processedData && processedData.weeks && processedData.values) {
-            console.log('데이터 처리 성공:', processedData);
+            // 주차를 절기별로 정렬 (36주부터 시작해서 다음 해 35주까지)
+            const weeks = [...processedData.weeks].sort((a, b) => sortWeeksBySeason(a, b));
             
-            // processETLData가 반환한 데이터를 대시보드 형식으로 변환
-            // processedData 형식: { weeks: ['32주', ...], values: { '0세': [...], ... } }
-            // 대시보드 형식: { ili: { weeks: [...], values: [...] }, ... }
-            
-            // 연령대별 데이터를 대시보드 지표로 매핑
-            // ds_0101은 "의사환자 분율" 데이터이므로 ili (인플루엔자 유사 질환)로 매핑
-            // 주차를 숫자 기준으로 다시 정렬 (안전장치)
-            const weeks = [...processedData.weeks].sort((a, b) => {
-              const weekAStr = a.toString().replace(/주/g, '').trim();
-              const weekBStr = b.toString().replace(/주/g, '').trim();
-              const weekA = parseInt(weekAStr) || 0;
-              const weekB = parseInt(weekBStr) || 0;
-              
-              if (isNaN(weekA) || isNaN(weekB)) {
-                return a.toString().localeCompare(b.toString());
-              }
-              
-              return weekA - weekB;
-            });
-            
-            console.log('📊 [useInfluenzaData] 정렬된 주차:', weeks);
-            
-            // 모든 연령대의 평균값을 계산하여 ILI 데이터로 사용 (기본값)
+            // 모든 연령대의 평균값을 계산하여 ILI 데이터로 사용
             const allAgeGroups = Object.keys(processedData.values).filter(ageGroup => {
-              // 절기 형식 제외
               const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
               return !isSeason;
             });
             
-            console.log('📊 [useInfluenzaData] 연령대 목록:', allAgeGroups);
-            console.log('📊 [useInfluenzaData] 주차 목록:', weeks);
+            // 주차별로 그룹화된 데이터를 다시 매핑
+            const weekValueMap = new Map();
             
-            const iliValues = weeks.map((week, index) => {
-              // 모든 연령대의 평균값 계산 (null 값 제외)
+            // 먼저 각 주차별로 모든 연령대의 평균값 계산
+            processedData.weeks.forEach((week, index) => {
               const validValues = allAgeGroups
-                .map(ageGroup => {
-                  const values = processedData.values[ageGroup];
-                  return values && values[index] !== null && values[index] !== undefined ? values[index] : null;
-                })
-                .filter(val => val !== null);
+                .map(ageGroup => processedData.values[ageGroup]?.[index])
+                .filter(val => val !== null && val !== undefined);
               
-              if (validValues.length === 0) {
-                return null;
+              if (validValues.length > 0) {
+                const avgValue = validValues.reduce((sum, val) => sum + val, 0) / validValues.length;
+                weekValueMap.set(week, avgValue);
               }
-              
-              const sum = validValues.reduce((acc, val) => acc + val, 0);
-              const avg = sum / validValues.length;
-              
-              console.log(`  주차 ${week} (인덱스 ${index}):`, {
-                연령대수: allAgeGroups.length,
-                유효값수: validValues.length,
-                값들: validValues,
-                평균: avg,
-              });
-              
-              return avg;
             });
             
-            console.log('📊 [useInfluenzaData] 계산된 ILI 값들:', iliValues);
+            // 정렬된 주차 순서대로 ILI 값 매핑 (실제 데이터가 있는 주차만)
+            const weekValuePairs = weeks
+              .map(week => ({ week, value: weekValueMap.get(week) }))
+              .filter(pair => pair.value !== null && pair.value !== undefined);
             
-            // 연령대별 데이터도 함께 저장 (필터링용)
+            const finalWeeks = weekValuePairs.map(pair => pair.week);
+            const iliValues = weekValuePairs.map(pair => pair.value);
+            
+            // 연령대별 데이터 저장 (실제 데이터가 있는 주차만)
             const ageGroupData = {};
             allAgeGroups.forEach((ageGroup) => {
+              const weekValueMapForAge = new Map();
+              processedData.weeks.forEach((week, index) => {
+                const value = processedData.values[ageGroup]?.[index];
+                if (value !== null && value !== undefined) {
+                  weekValueMapForAge.set(week, value);
+                }
+              });
+              
+              // 실제 데이터가 있는 주차만 필터링
+              const ageWeekValuePairs = finalWeeks
+                .map(week => ({ week, value: weekValueMapForAge.get(week) }))
+                .filter(pair => pair.value !== null && pair.value !== undefined);
+              
               ageGroupData[ageGroup] = {
-                weeks,
-                values: processedData.values[ageGroup] || [],
+                weeks: ageWeekValuePairs.map(pair => pair.week),
+                values: ageWeekValuePairs.map(pair => pair.value),
               };
             });
             
             // 절기별 데이터 저장
             const seasonData = processedData.seasons || {};
             
-            // 절기별 데이터만 asdf로 로그 출력
-            console.log('asdf:', JSON.stringify(seasonData, null, 2));
+            console.log(`✅ [${selectedSeason}절기] 데이터 처리 완료:`, {
+              주차수: finalWeeks.length,
+              주차목록: finalWeeks,
+              값목록: iliValues,
+              주차값쌍: finalWeeks.map((w, i) => ({ week: w, value: iliValues[i] })),
+              절기수: Object.keys(seasonData).length,
+            });
             
             setInfluenzaData({
               ili: { 
-                weeks, 
+                weeks: finalWeeks, 
                 values: iliValues, 
                 ageGroups: ageGroupData, // 연령대별 데이터 추가
                 seasons: seasonData, // 절기별 데이터 추가
@@ -218,18 +281,12 @@ export const useInfluenzaData = (selectedSeason, selectedWeek, dsid = 'ds_0101')
               kriss: defaultInfluenzaData.kriss,
               nedis: defaultInfluenzaData.nedis,
             });
-          } else {
-            console.warn('데이터 처리 실패: processETLData가 null을 반환했습니다.');
-            console.warn('allRawData 샘플:', allRawData[0]); // 첫 번째 항목 로그
           }
           }
-        } else {
-          console.error('API 응답 형식이 올바르지 않습니다.');
-          console.error('예상: 배열, 실제:', typeof allRawData, allRawData);
         }
       } catch (err) {
-        // API 호출 실패 시 기본값 유지 (하드코딩된 데이터)
-        console.error('API 데이터 로딩 실패:', err);
+        // API 호출 실패 시 에러 로그
+        console.error(`❌ [${selectedSeason}절기] 데이터 로드 실패:`, err.message);
         
         let errorMessage = '데이터를 불러오는데 실패했습니다. 기본 데이터를 표시합니다.';
         

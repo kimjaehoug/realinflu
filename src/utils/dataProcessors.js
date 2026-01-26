@@ -7,10 +7,7 @@ import { getSeasonFromWeek, extractYearFromWeek, sortWeeksBySeason } from './sea
  */
 export const processETLData = (rawData) => {
   try {
-    console.log('🔍 [processETLData] 시작 - rawData 개수:', rawData?.length);
-    
     if (!Array.isArray(rawData) || rawData.length === 0) {
-      console.warn('⚠️ [processETLData] rawData가 비어있거나 배열이 아님');
       return null;
     }
 
@@ -23,14 +20,10 @@ export const processETLData = (rawData) => {
         const parsedData = JSON.parse(item.parsedData || '[]');
         
         if (!Array.isArray(parsedData) || parsedData.length === 0) {
-          console.log(`📦 [processETLData] 항목 ${itemIndex}: parsedData가 비어있음`);
           return;
         }
 
-        console.log(`📦 [processETLData] 항목 ${itemIndex}: parsedData ${parsedData.length}개 행`);
-
         parsedData.forEach((row, rowIndex) => {
-          console.log(`  📄 [processETLData] 행 ${rowIndex}:`, row);
           // 주차 정보 추출 (다양한 형식 지원)
           let week = null;
           let year = null;
@@ -62,26 +55,11 @@ export const processETLData = (rawData) => {
           }
           
           if (!week) {
-            console.warn('주차 정보를 찾을 수 없음:', row);
             return;
           }
           
           // 연도+주차 조합으로 키 생성 (같은 주차의 다른 연도 데이터를 구분하기 위해)
           const weekYearKey = `${year}_${week}`;
-          
-          // 2025년 36주~47주 데이터 디버깅
-          if (year === '2025' || parseInt(year) === 2025) {
-            const weekNum = parseInt(week.replace('주', ''));
-            if (weekNum >= 36 && weekNum <= 47) {
-              console.log(`🔍 [processETLData] 2025년 ${week} 데이터 처리:`, {
-                weekYearKey,
-                row,
-                weekKey,
-                extractedYear: year,
-                extractedWeek: week,
-              });
-            }
-          }
           
           // 주차별 데이터 초기화
           if (!weekDataMap.has(weekYearKey)) {
@@ -105,7 +83,6 @@ export const processETLData = (rawData) => {
           
           if (hasAgeGroupField) {
             // 형식 2 처리: 값 필드 + 연령대 필드 조합
-            console.log(`    🔍 형식 2 확인 (주차: ${week}): 연령대 필드 = "${row['연령대']}"`);
             let ageGroup = row['연령대'];
             // 절기 정보인지 확인 (예: "24/25절기", "17/18절기" 등)
             const isSeason = /^\d{2}\/\d{2}절기$/.test(ageGroup);
@@ -171,21 +148,13 @@ export const processETLData = (rawData) => {
                   weekData.seasons[ageGroup] = [];
                 }
                 weekData.seasons[ageGroup].push(valueToUse);
-                console.log(`      ✅ 절기 데이터 저장: ${ageGroup} = ${valueToUse} (필드: ${valueFieldName})`);
               } else {
                 // 연령대별 데이터로 저장
                 if (!weekData.values[ageGroup]) {
                   weekData.values[ageGroup] = [];
                 }
                 weekData.values[ageGroup].push(valueToUse);
-                console.log(`      ✅ 연령대 데이터 저장: ${ageGroup} = ${valueToUse} (필드: ${valueFieldName})`);
               }
-            }
-            
-            if (valueFieldsFound.length > 0) {
-              console.log(`    ✅ 형식 2 발견 (주차: ${week}, 연령대: ${ageGroup}):`, valueFieldsFound);
-            } else {
-              console.log(`    ⚠️ 형식 2 확인했으나 값 필드를 찾을 수 없음 (주차: ${week}, 연령대: ${ageGroup})`);
             }
           } else {
             // 형식 1 처리: 키 자체가 연령대인 경우
@@ -210,14 +179,10 @@ export const processETLData = (rawData) => {
                 }
               }
             });
-            
-            if (ageGroupKeysFound.length > 0) {
-              console.log(`    ✅ 형식 1 발견 (주차: ${week}):`, ageGroupKeysFound);
-            }
           }
         });
       } catch (parseError) {
-        console.warn('parsedData 파싱 실패:', parseError, item);
+        // 파싱 실패 시 해당 항목만 건너뜀
       }
     });
 
@@ -228,42 +193,10 @@ export const processETLData = (rawData) => {
       allWeeks.add(weekData.week);
     });
     
-    const sortedWeeks = Array.from(allWeeks).sort((a, b) => {
-      // "32주" 형식에서 숫자만 추출
-      const weekAStr = a.toString().replace(/주/g, '').trim();
-      const weekBStr = b.toString().replace(/주/g, '').trim();
-      const weekA = parseInt(weekAStr) || 0;
-      const weekB = parseInt(weekBStr) || 0;
-      
-      if (isNaN(weekA) || isNaN(weekB)) {
-        console.warn(`⚠️ [processETLData] 주차 파싱 실패: "${a}" -> ${weekA}, "${b}" -> ${weekB}`);
-        return a.toString().localeCompare(b.toString());
-      }
-      
-      return weekA - weekB;
-    });
-    
-    console.log('📊 [processETLData] 정렬된 주차:', sortedWeeks);
-
-    console.log('📊 [processETLData] 주차별 데이터 요약:');
-    sortedWeeks.forEach((week) => {
-      // 같은 주차의 모든 연도 데이터를 확인
-      let totalAgeGroups = 0;
-      let totalSeasons = 0;
-      weekDataMap.forEach((weekData, weekYearKey) => {
-        if (weekData.week === week) {
-          totalAgeGroups += Object.keys(weekData.values || {}).length;
-          totalSeasons += weekData.seasons ? Object.keys(weekData.seasons).length : 0;
-        }
-      });
-      console.log(`  주차 ${week}:`, {
-        연령대수: totalAgeGroups,
-        절기수: totalSeasons,
-      });
-    });
+    // 절기별 주차 정렬 사용 (36주부터 시작해서 다음 해 35주까지)
+    const sortedWeeks = Array.from(allWeeks).sort((a, b) => sortWeeksBySeason(a, b));
 
     if (sortedWeeks.length === 0) {
-      console.warn('⚠️ [processETLData] 주차 데이터가 없음');
       return null;
     }
 
@@ -284,13 +217,26 @@ export const processETLData = (rawData) => {
       });
     });
     
-    console.log('👥 [processETLData] 발견된 연령대:', Array.from(allAgeGroups).sort());
+    // 실제 데이터가 있는 주차만 추출
+    const weeksWithData = new Set();
+    weekDataMap.forEach((weekData) => {
+      // 해당 주차에 실제 값이 있는지 확인
+      const hasData = Object.keys(weekData.values || {}).some(ageGroup => {
+        const values = weekData.values[ageGroup];
+        return values && values.length > 0 && values.some(v => v !== null && v !== undefined);
+      });
+      if (hasData) {
+        weeksWithData.add(weekData.week);
+      }
+    });
+    
+    // 실제 데이터가 있는 주차만 정렬
+    const finalWeeks = Array.from(weeksWithData).sort((a, b) => sortWeeksBySeason(a, b));
 
-    // 각 연령대별로 주차별 값 배열 생성
-    // 같은 주차의 여러 연도 데이터가 있을 경우 평균값 계산
+    // 각 연령대별로 주차별 값 배열 생성 (실제 데이터가 있는 주차만)
     allAgeGroups.forEach((ageGroup) => {
       result.values[ageGroup] = [];
-      sortedWeeks.forEach((week) => {
+      finalWeeks.forEach((week) => {
         // 같은 주차의 모든 연도 데이터를 수집
         const weekValues = [];
         weekDataMap.forEach((weekData, weekYearKey) => {
@@ -310,8 +256,10 @@ export const processETLData = (rawData) => {
           result.values[ageGroup].push(null);
         }
       });
-      console.log(`  📈 연령대 ${ageGroup}: ${result.values[ageGroup].filter(v => v !== null).length}/${sortedWeeks.length} 주차에 데이터 있음`);
     });
+    
+    // 실제 데이터가 있는 주차만 사용
+    result.weeks = finalWeeks;
 
     // 절기별 데이터 처리
     // 방법 1: 연령대 필드에 "24/25절기"가 있는 데이터 (기존 방식)
@@ -363,40 +311,18 @@ export const processETLData = (rawData) => {
             const weekYearKey = `${year}_${week}`;
             if (!weekToSeasonMap.has(weekYearKey)) {
               weekToSeasonMap.set(weekYearKey, season);
-              // 2025년 36주~47주 데이터 디버깅
-              if (year === '2025' && parseInt(week.replace('주', '')) >= 36 && parseInt(week.replace('주', '')) <= 47) {
-                console.log(`🔍 [절기 계산] ${weekYearKey} -> ${season} (item ${itemIndex}, row ${rowIndex})`);
-              }
             }
             // 주차만으로도 매핑 저장 (호환성) - 같은 주차에 여러 연도가 있으면 마지막 것으로 덮어씀
             weekToSeasonMap.set(week, season);
           }
         });
       } catch (error) {
-        console.warn('절기 계산 중 오류:', error);
+        // 절기 계산 중 오류 발생 시 해당 항목만 건너뜀
       }
     });
 
     // 모든 절기 통합
     const allSeasons = new Set([...allSeasonsFromField, ...allSeasonsFromWeeks]);
-    console.log('📅 [processETLData] 발견된 절기 (필드 기반):', Array.from(allSeasonsFromField).sort());
-    console.log('📅 [processETLData] 발견된 절기 (주차 기반):', Array.from(allSeasonsFromWeeks).sort());
-    console.log('📅 [processETLData] 주차->절기 매핑:', Array.from(weekToSeasonMap.entries()));
-    
-    // 2025년 36주~47주 데이터 디버깅
-    const week2025_36to47 = Array.from(weekToSeasonMap.entries()).filter(([key, season]) => {
-      return key.includes('2025') && (key.includes('36주') || key.includes('37주') || key.includes('38주') || key.includes('39주') || key.includes('40주') || key.includes('41주') || key.includes('42주') || key.includes('43주') || key.includes('44주') || key.includes('45주') || key.includes('46주') || key.includes('47주'));
-    });
-    console.log('🔍 [processETLData] 2025년 36주~47주 절기 매핑:', week2025_36to47);
-    
-    // weekDataMap에 2025년 36주~47주 데이터가 있는지 확인
-    const weekData2025_36to47 = Array.from(weekDataMap.entries()).filter(([key, data]) => {
-      return key.includes('2025') && (key.includes('36주') || key.includes('37주') || key.includes('38주') || key.includes('39주') || key.includes('40주') || key.includes('41주') || key.includes('42주') || key.includes('43주') || key.includes('44주') || key.includes('45주') || key.includes('46주') || key.includes('47주'));
-    });
-    console.log('🔍 [processETLData] weekDataMap에 있는 2025년 36주~47주 데이터:', weekData2025_36to47.length, '건');
-    if (weekData2025_36to47.length > 0) {
-      console.log('🔍 [processETLData] weekDataMap 샘플:', weekData2025_36to47.slice(0, 2));
-    }
 
     if (allSeasons.size > 0) {
       result.seasons = {};
@@ -431,42 +357,16 @@ export const processETLData = (rawData) => {
             }
           }
         });
-        
-        console.log(`  🔍 [절기별] 절기 ${season}에 속하는 연도+주차 조합:`, weekYearKeysForSeason);
-        
-        // 25/26절기 디버깅
-        if (season === '25/26절기') {
-          console.log(`  🔍 [25/26절기 디버깅] weekYearKeysForSeason (전체):`, weekYearKeysForSeason);
-          const weekYearKeys2025_36to47 = weekYearKeysForSeason.filter(k => k.includes('2025') && (k.includes('36주') || k.includes('37주') || k.includes('38주') || k.includes('39주') || k.includes('40주') || k.includes('41주') || k.includes('42주') || k.includes('43주') || k.includes('44주') || k.includes('45주') || k.includes('46주') || k.includes('47주')));
-          console.log(`  🔍 [25/26절기 디버깅] weekYearKeysForSeason 중 2025년 36주~47주:`, weekYearKeys2025_36to47);
-          
-          const weekDataMapKeys2025_36to47 = Array.from(weekDataMap.keys()).filter(k => k.includes('2025') && (k.includes('36주') || k.includes('37주') || k.includes('38주') || k.includes('39주') || k.includes('40주') || k.includes('41주') || k.includes('42주') || k.includes('43주') || k.includes('44주') || k.includes('45주') || k.includes('46주') || k.includes('47주')));
-          console.log(`  🔍 [25/26절기 디버깅] weekDataMap 키들 (2025년 36주~47주):`, weekDataMapKeys2025_36to47);
-          
-          // weekToSeasonMap에서 2025년 36주~47주가 25/26절기로 매핑되어 있는지 확인
-          const weekToSeason2025_36to47 = Array.from(weekToSeasonMap.entries()).filter(([key, mappedSeason]) => {
-            return mappedSeason === '25/26절기' && key.includes('2025') && (key.includes('36주') || key.includes('37주') || key.includes('38주') || key.includes('39주') || key.includes('40주') || key.includes('41주') || key.includes('42주') || key.includes('43주') || key.includes('44주') || key.includes('45주') || key.includes('46주') || key.includes('47주'));
-          });
-          console.log(`  🔍 [25/26절기 디버깅] weekToSeasonMap에서 25/26절기로 매핑된 2025년 36주~47주:`, weekToSeason2025_36to47.map(([k]) => k));
           
           // weekDataMap에 있지만 weekYearKeysForSeason에 없는 경우 추가
-          weekDataMapKeys2025_36to47.forEach(weekYearKey => {
+        weekDataMap.forEach((weekData, weekYearKey) => {
             if (!weekYearKeysForSeason.includes(weekYearKey)) {
-              // weekToSeasonMap에서 확인
               const mappedSeason = weekToSeasonMap.get(weekYearKey);
-              if (mappedSeason === '25/26절기') {
-                console.log(`  ✅ [25/26절기 디버깅] ${weekYearKey}를 weekYearKeysForSeason에 추가`);
+            if (mappedSeason === season) {
                 weekYearKeysForSeason.push(weekYearKey);
-              } else {
-                console.log(`  ⚠️ [25/26절기 디버깅] ${weekYearKey}는 ${mappedSeason}로 매핑되어 있음 (25/26절기가 아님)`);
-              }
-            } else {
-              console.log(`  ✅ [25/26절기 디버깅] ${weekYearKey}는 이미 weekYearKeysForSeason에 포함되어 있음`);
             }
-          });
-          
-          console.log(`  🔍 [25/26절기 디버깅] 최종 weekYearKeysForSeason (2025년 36주~47주):`, weekYearKeysForSeason.filter(k => k.includes('2025') && (k.includes('36주') || k.includes('37주') || k.includes('38주') || k.includes('39주') || k.includes('40주') || k.includes('41주') || k.includes('42주') || k.includes('43주') || k.includes('44주') || k.includes('45주') || k.includes('46주') || k.includes('47주'))));
-        }
+          }
+        });
         
         weekYearKeysForSeason.forEach((weekYearKey) => {
           // weekYearKey에서 주차 추출 (예: "2017_36주" -> "36주")
@@ -474,23 +374,11 @@ export const processETLData = (rawData) => {
           
           // 이미 추가된 주차는 제외 (같은 주차가 여러 연도에 있을 수 있으므로 중복 체크)
           if (result.seasons[season].weeks.includes(week)) {
-            if (season === '25/26절기' && weekYearKey.includes('2025') && (weekYearKey.includes('36주') || weekYearKey.includes('37주') || weekYearKey.includes('38주') || weekYearKey.includes('39주') || weekYearKey.includes('40주') || weekYearKey.includes('41주') || weekYearKey.includes('42주') || weekYearKey.includes('43주') || weekYearKey.includes('44주') || weekYearKey.includes('45주') || weekYearKey.includes('46주') || weekYearKey.includes('47주'))) {
-              console.log(`  ⚠️ [25/26절기 디버깅] ${weekYearKey} (주차: ${week})는 이미 추가되어 있음`);
-            }
             return;
           }
           
           // 해당 연도+주차의 모든 연령대 데이터 평균 계산
           const weekData = weekDataMap.get(weekYearKey);
-          
-          // 25/26절기 디버깅
-          if (season === '25/26절기' && weekYearKey.includes('2025') && (weekYearKey.includes('36주') || weekYearKey.includes('37주') || weekYearKey.includes('38주') || weekYearKey.includes('39주') || weekYearKey.includes('40주') || weekYearKey.includes('41주') || weekYearKey.includes('42주') || weekYearKey.includes('43주') || weekYearKey.includes('44주') || weekYearKey.includes('45주') || weekYearKey.includes('46주') || weekYearKey.includes('47주'))) {
-            console.log(`  🔍 [25/26절기 디버깅] ${weekYearKey} 처리 중:`, {
-              weekData: weekData ? '존재' : '없음',
-              hasValues: weekData && weekData.values ? '있음' : '없음',
-              valuesKeys: weekData && weekData.values ? Object.keys(weekData.values) : [],
-            });
-          }
           
           if (weekData && weekData.values) {
             const allAgeGroupValues = [];
@@ -511,12 +399,6 @@ export const processETLData = (rawData) => {
               // 모든 연령대의 평균값을 다시 평균내어 해당 주차의 전체 평균 계산
               const overallAvg = allAgeGroupValues.reduce((sum, val) => sum + val, 0) / allAgeGroupValues.length;
               
-              console.log(`  📊 [절기별] 절기 ${season}, 연도+주차 ${weekYearKey} (주차: ${week}):`, {
-                연령대수: allAgeGroupValues.length,
-                연령대별평균: ageGroupDetails,
-                전체평균: overallAvg,
-              });
-              
               result.seasons[season].weeks.push(week);
               result.seasons[season].values.push(overallAvg);
             }
@@ -531,21 +413,9 @@ export const processETLData = (rawData) => {
         
         result.seasons[season].weeks = weekValuePairs.map(pair => pair.week);
         result.seasons[season].values = weekValuePairs.map(pair => pair.value);
-        
-        console.log(`  📈 절기 ${season}: ${result.seasons[season].weeks.length} 주차에 데이터 있음`);
       });
-      
-      // 절기별 데이터만 asdf로 로그 출력
-      console.log('asdf:', JSON.stringify(result.seasons, null, 2));
     }
 
-    console.log('✅ [processETLData] 최종 처리 결과:', {
-      주차수: result.weeks.length,
-      연령대수: Object.keys(result.values).length,
-      절기수: result.seasons ? Object.keys(result.seasons).length : 0,
-      연령대목록: Object.keys(result.values).sort(),
-      절기목록: result.seasons ? Object.keys(result.seasons).sort() : [],
-    });
     return result;
   } catch (error) {
     console.error('데이터 처리 실패:', error);

@@ -5,6 +5,7 @@ import { FiMenu, FiChevronRight } from 'react-icons/fi';
 const Sidebar = ({ isOpen, onToggle, onMenuClick, activeMenuId = 'dashboard' }) => {
   const menuItems = [
     { id: 'dashboard', label: '대시보드' },
+    { id: 'prediction', label: 'AI 예측' },
     { id: 'news', label: '감염병 뉴스' },
     { id: 'weekly', label: '주간 발생 동향' },
     { id: 'influenza', label: '인플루엔자란?' },

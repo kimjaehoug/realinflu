@@ -4,6 +4,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
+import Prediction from './components/Prediction';
 import Footer from './components/Footer';
 import './App.css';
 
@@ -65,9 +66,14 @@ function App() {
   };
 
   const handleMenuClick = (menuId) => {
-    setActiveMenuId(menuId);
     if (menuId === 'hospital') {
+      setActiveMenuId('dashboard');
       setShouldOpenHospitalMap(true);
+    } else if (menuId === 'news' || menuId === 'weekly' || menuId === 'influenza') {
+      // Dashboard 컴포넌트에서 다이얼로그를 열도록 activeMenuId를 'dashboard'로 설정
+      setActiveMenuId('dashboard');
+    } else {
+      setActiveMenuId(menuId);
     }
   };
 
@@ -86,11 +92,16 @@ function App() {
           activeMenuId={activeMenuId}
         />
         <Header isOpen={sidebarOpen} />
-        <Dashboard 
-          isOpen={sidebarOpen}
-          shouldOpenHospitalMap={shouldOpenHospitalMap}
-          onHospitalMapOpened={handleHospitalMapOpened}
-        />
+        {activeMenuId === 'prediction' ? (
+          <Prediction isOpen={sidebarOpen} />
+        ) : (
+          <Dashboard 
+            isOpen={sidebarOpen}
+            shouldOpenHospitalMap={shouldOpenHospitalMap}
+            onHospitalMapOpened={handleHospitalMapOpened}
+            activeMenuId={activeMenuId}
+          />
+        )}
         <Footer isOpen={sidebarOpen} />
       </div>
     </ThemeProvider>

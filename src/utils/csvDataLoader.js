@@ -98,8 +98,6 @@ const parseCSVLine = (line) => {
  * @returns {Promise<Array>} 로드된 데이터 배열
  */
 export const loadHistoricalCSVData = async (dsid = 'ds_0101') => {
-  console.log('📂 [CSV 로더] CSV 데이터 로드 시작:', { dsid });
-  
   const allData = [];
   const startYear = 2017;
   const endYear = 2025;
@@ -125,9 +123,6 @@ export const loadHistoricalCSVData = async (dsid = 'ds_0101') => {
           
           // 연도나 주차가 유효하지 않으면 제외
           if (!rowYear || !week || week < 1 || week > 53) {
-            if (year === 2025 && week >= 36 && week <= 47) {
-              console.warn(`⚠️ [CSV 로더] ${year}년 ${week}주 데이터 필터링 제외:`, { rowYear, week, row });
-            }
             return false;
           }
           
@@ -136,69 +131,22 @@ export const loadHistoricalCSVData = async (dsid = 'ds_0101') => {
           
           // 2025년 데이터: 47주 이하만 포함 (48주 이상은 API에서 가져옴)
           if (rowYear === endYear && week > endWeek) {
-            if (week >= 36 && week <= 47) {
-              console.warn(`⚠️ [CSV 로더] ${year}년 ${week}주 데이터 필터링 제외 (endWeek=${endWeek}):`, { rowYear, week });
-            }
             return false;
           }
           
           // 2017년 이전 또는 2025년 이후 데이터는 제외
           if (rowYear < startYear || rowYear > endYear) {
-            if (week >= 36 && week <= 47) {
-              console.warn(`⚠️ [CSV 로더] ${year}년 ${week}주 데이터 필터링 제외 (연도 범위):`, { rowYear, week, startYear, endYear });
-            }
             return false;
-          }
-          
-          // 2025년 36주~47주 데이터 디버깅
-          if (rowYear === 2025 && week >= 36 && week <= 47) {
-            console.log(`✅ [CSV 로더] 2025년 ${week}주 데이터 포함:`, row);
           }
           
           return true;
         });
         
-        // 2025년 파일의 경우 36주~47주 데이터 개수 확인
-        if (year === 2025) {
-          const week36to47 = filteredData.filter(row => {
-            const rowYear = parseInt(row['연도'] || row['연도 '] || '0');
-            const week = parseInt(row['주차'] || row['주차 '] || '0');
-            return rowYear === 2025 && week >= 36 && week <= 47;
-          });
-          console.log(`📂 [CSV 로더] ${year}년 파일: 전체 ${filteredData.length}건, 36주~47주 ${week36to47.length}건`);
-        } else {
-          console.log(`📂 [CSV 로더] ${year}년 파일: ${filteredData.length}건`);
-        }
         allData.push(...filteredData);
-      } else {
-        console.warn(`📂 [CSV 로더] ${year}년 데이터 없음: ${fileName}`);
       }
     } catch (error) {
-      console.warn(`📂 [CSV 로더] ${year}년 CSV 파일 로드 실패:`, error);
+      // CSV 파일 로드 실패 시 해당 연도만 건너뜀
     }
-  }
-  
-  // 2025년 36주~47주 데이터 개수 확인
-  const week36to47Count = allData.filter(row => {
-    const rowYear = parseInt(row['연도'] || row['연도 '] || '0');
-    const week = parseInt(row['주차'] || row['주차 '] || '0');
-    return rowYear === 2025 && week >= 36 && week <= 47;
-  }).length;
-  
-  console.log(`📂 [CSV 로더] CSV 데이터 로드 완료: 총 ${allData.length}건 (2017년 36주 ~ 2025년 47주)`);
-  console.log(`📂 [CSV 로더] 2025년 36주~47주 데이터: ${week36to47Count}건`);
-  console.log('📂 [CSV 로더] CSV 데이터 샘플:', allData.slice(0, 3));
-  
-  // 2025년 36주~47주 데이터 샘플 출력
-  if (week36to47Count > 0) {
-    const week36to47Samples = allData.filter(row => {
-      const rowYear = parseInt(row['연도'] || row['연도 '] || '0');
-      const week = parseInt(row['주차'] || row['주차 '] || '0');
-      return rowYear === 2025 && week >= 36 && week <= 47;
-    }).slice(0, 3);
-    console.log('📂 [CSV 로더] 2025년 36주~47주 데이터 샘플:', week36to47Samples);
-  } else {
-    console.warn('⚠️ [CSV 로더] 2025년 36주~47주 데이터가 없습니다!');
   }
   
   return allData;
