@@ -1,6 +1,7 @@
 import apiClient from './config';
 import axios from 'axios';
 import { getAccessToken } from './auth';
+import { getDatasetName } from '../utils/datasetMetadata';
 
 /**
  * 절기를 날짜 범위로 변환하는 함수
@@ -31,11 +32,12 @@ const getDateRangeFromSeason = (season) => {
  * @returns {Promise} 최근 데이터
  */
 export const getRecentETLData = async (dsid, cnt) => {
+  const dataname = getDatasetName(dsid) || dsid;
   try {
     const response = await apiClient.get(`/etl_data/id/${dsid}/recent/${cnt}`);
     return response.data;
   } catch (error) {
-    console.error(`ETL 데이터 조회 실패 (dsid: ${dsid}, cnt: ${cnt}):`, error);
+    console.error(`ETL 데이터 조회 실패 (${dataname}, ${dsid}, cnt: ${cnt}):`, error);
     throw error;
   }
 };
@@ -48,15 +50,16 @@ export const getRecentETLData = async (dsid, cnt) => {
  * @returns {Promise} 기간별 데이터
  */
 export const getETLDataByDateRange = async (dsid, from, to) => {
+  const dataname = getDatasetName(dsid) || dsid;
   try {
     const apiUrl = `/etl_data/id/${dsid}/from/${from}/to/${to}`;
     
-    console.log(`🔵 [날짜 범위 API] 요청 URL:`, apiUrl);
-    console.log(`🔵 [날짜 범위 API] 요청 파라미터:`, { dsid, from, to });
+    console.log(`🔵 [날짜 범위 API] ${dataname} (${dsid}) 요청 URL:`, apiUrl);
+    console.log(`🔵 [날짜 범위 API] 요청 파라미터:`, { dataname, dsid, from, to });
     
     const response = await apiClient.get(apiUrl);
     
-    console.log(`✅ [날짜 범위 API] 응답 성공:`, {
+    console.log(`✅ [날짜 범위 API] ${dataname} 응답 성공:`, {
       status: response.status,
       statusText: response.statusText,
       dataType: typeof response.data,
@@ -66,7 +69,7 @@ export const getETLDataByDateRange = async (dsid, from, to) => {
     
     if (response.data) {
       const rawData = response.data?.body?.data || response.data?.data || response.data;
-      console.log(`📦 [날짜 범위 API] 실제 데이터:`, {
+      console.log(`📦 [날짜 범위 API] ${dataname} 실제 데이터:`, {
         데이터개수: Array.isArray(rawData) ? rawData.length : 'N/A',
         샘플데이터: Array.isArray(rawData) && rawData.length > 0 ? rawData[0] : null,
       });
@@ -74,7 +77,8 @@ export const getETLDataByDateRange = async (dsid, from, to) => {
     
     return response.data;
   } catch (error) {
-    console.error(`❌ [날짜 범위 API] 실패:`, {
+    console.error(`❌ [날짜 범위 API] ${dataname} (${dsid}) 실패:`, {
+      dataname,
       dsid,
       from,
       to,
@@ -124,12 +128,13 @@ export const getETLDataStatisticsByDateRange = async (from, to) => {
  * @returns {Promise} origin별 데이터
  */
 export const getETLDataByOrigin = async (dsid, origin) => {
+  const dataname = getDatasetName(dsid) || dsid;
   try {
     // 전체 URL 사용: http://211.238.12.60:8084/data/api/v1/etl_data/id/{{dsid}}/origin/{{origin}}
     const fullUrl = `http://211.238.12.60:8084/data/api/v1/etl_data/id/${dsid}/origin/${origin}`;
     
-    console.log(`🔵 [origin API] 요청 URL:`, fullUrl);
-    console.log(`🔵 [origin API] 요청 파라미터:`, { dsid, origin });
+    console.log(`🔵 [origin API] ${dataname} (${dsid}) 요청 URL:`, fullUrl);
+    console.log(`🔵 [origin API] 요청 파라미터:`, { dataname, dsid, origin });
     
     // 인증 토큰 가져오기
     let token = null;
@@ -148,7 +153,7 @@ export const getETLDataByOrigin = async (dsid, origin) => {
       timeout: 30000,
     });
     
-    console.log(`✅ [origin API] 응답 성공:`, {
+    console.log(`✅ [origin API] ${dataname} 응답 성공:`, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -159,7 +164,7 @@ export const getETLDataByOrigin = async (dsid, origin) => {
     
     if (response.data) {
       const rawData = response.data?.body?.data || response.data?.data || response.data;
-      console.log(`📦 [origin API] 실제 데이터:`, {
+      console.log(`📦 [origin API] ${dataname} 실제 데이터:`, {
         데이터개수: Array.isArray(rawData) ? rawData.length : 'N/A',
         샘플데이터: Array.isArray(rawData) && rawData.length > 0 ? rawData[0] : null,
       });
@@ -167,7 +172,9 @@ export const getETLDataByOrigin = async (dsid, origin) => {
     
     return response.data;
   } catch (error) {
-    console.error(`❌ [origin API] 실패:`, {
+    console.error(`❌ [origin API] ${dataname} (${dsid}) origin ${origin} 실패:`, {
+      dataname,
+      dsid,
       origin,
       error: error.message,
       response: error.response?.data,
@@ -187,10 +194,11 @@ export const getETLDataByOrigin = async (dsid, origin) => {
  * @returns {Promise} 절기별 데이터
  */
 export const getETLDataBySeason = async (dsid, season, origins = null) => {
+  const dataname = getDatasetName(dsid) || dsid;
   try {
     // 25/26절기는 origin별로 요청
     if (season === '25/26' && origins && origins.length > 0) {
-      console.log(`🔵 [${season}절기 API] origin별 요청 시작 (${origins.length}개)`);
+      console.log(`🔵 [${season}절기 API] ${dataname} (${dsid}) origin별 요청 시작 (${origins.length}개)`);
       
       const allData = [];
       
@@ -206,11 +214,11 @@ export const getETLDataBySeason = async (dsid, season, origins = null) => {
             allData.push(originRawData);
           }
         } catch (err) {
-          console.warn(`⚠️ [${season}절기 API] origin ${origin} 요청 실패:`, err.message);
+          console.warn(`⚠️ [${season}절기 API] ${dataname} origin ${origin} 요청 실패:`, err.message);
         }
       }
       
-      console.log(`✅ [${season}절기 API] origin별 요청 완료: 총 ${allData.length}건`);
+      console.log(`✅ [${season}절기 API] ${dataname} origin별 요청 완료: 총 ${allData.length}건`);
       
       return {
         body: { data: allData },
@@ -221,17 +229,17 @@ export const getETLDataBySeason = async (dsid, season, origins = null) => {
       const dateRange = getDateRangeFromSeason(season);
       const apiUrl = `/etl_data/id/${dsid}/from/${dateRange.from}/to/${dateRange.to}`;
       
-      console.log(`🔵 [${season}절기 API] 요청: ${apiUrl}`);
+      console.log(`🔵 [${season}절기 API] ${dataname} (${dsid}) 요청: ${apiUrl}`);
       console.log(`   날짜 범위: ${dateRange.from} ~ ${dateRange.to}`);
       
       const response = await apiClient.get(apiUrl);
       
-      console.log(`✅ [${season}절기 API] 응답 성공:`, response.status);
+      console.log(`✅ [${season}절기 API] ${dataname} 응답 성공:`, response.status);
       
       return response.data;
     }
   } catch (error) {
-    console.error(`❌ [${season}절기 API] 실패:`, error.message);
+    console.error(`❌ [${season}절기 API] ${dataname} (${dsid}) 실패:`, error.message);
     throw error;
   }
 };

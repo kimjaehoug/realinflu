@@ -70,8 +70,8 @@ const navItems = [
 ];
 
 const SEASON_OPTIONS = [
-  '24/25', // 실제 데이터가 있는 절기로 변경
   '25/26',
+  '24/25',
   '23/24',
   '22/23',
   '21/22',
@@ -232,6 +232,25 @@ const ageGroupColors = [
   { border: 'rgba(239, 68, 68, 0.9)', fill: 'rgba(239, 68, 68, 0.28)' }, // 65세이상
 ];
 
+// 연령대 정렬 함수: ageGroupColorMap의 키 순서를 기준으로 정렬
+const sortAgeGroups = (ageGroups) => {
+  const orderedKeys = Object.keys(ageGroupColorMap);
+  return [...ageGroups].sort((a, b) => {
+    const indexA = orderedKeys.indexOf(a);
+    const indexB = orderedKeys.indexOf(b);
+    
+    // 정의된 연령대는 순서대로 정렬
+    if (indexA !== -1 && indexB !== -1) {
+      return indexA - indexB;
+    }
+    // 정의되지 않은 연령대는 마지막에 배치
+    if (indexA === -1 && indexB === -1) {
+      return a.localeCompare(b);
+    }
+    return indexA === -1 ? 1 : -1;
+  });
+};
+
 // 비교 차트 옵션 (범례 표시)
 const comparisonChartOptions = {
   responsive: true,
@@ -344,9 +363,6 @@ const visitorOptionFactory = (formatter, seasonLabel, unit) => ({
   },
   interaction: { intersect: false, mode: 'index' },
 });
-
-const iliWeeks = ['37주', '38주', '39주', '40주', '41주', '42주', '43주', '44주'];
-const iliValues = [10.5, 12.3, 14.8, 17.2, 19.5, 15.3, 18.7, 22.8];
 
 const ariWeeks = ['34주', '35주', '36주', '37주'];
 const ariValues = [18, 23, 28, 34];
@@ -518,9 +534,9 @@ const graphChoices = [
     description: '외래 의료기관 1,000명당 인플루엔자 의심 환자 분율',
     seasonLabel: '25/26절기',
     unit: '명',
-    weeks: iliWeeks,
-    values: iliValues,
-    data: createLineConfig(iliWeeks, iliValues),
+    weeks: [],
+    values: [],
+    data: createLineConfig([], []),
     formatter: value => value.toFixed(2),
   },
   {
@@ -587,7 +603,7 @@ const graphChoices = [
 
 const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMapOpened, activeMenuId = 'dashboard' }) => {
   const [selectedGraphId, setSelectedGraphId] = useState(graphChoices[0].id);
-  const [selectedSeason, setSelectedSeason] = useState(SEASON_OPTIONS[0]); // '24/25' - 실제 데이터가 있는 절기
+  const [selectedSeason, setSelectedSeason] = useState('25/26'); // 최신 절기로 초기화
   const [selectedWeek, setSelectedWeek] = useState('37'); // 2024년 37주 - 실제 데이터가 있는 주차
   const [selectedAgeGroup, setSelectedAgeGroup] = useState(null); // 선택된 연령대 (null이면 전체 평균)
   const [viewMode, setViewMode] = useState('single'); // 'single', 'season', 'ageGroup' - 그래프 표시 모드
@@ -2205,12 +2221,11 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                     {/* 연령대별 비교 차트 선택 UI (viewMode가 'ageGroup'일 때만 표시) */}
                     {selectedGraphId === 'ili' && viewMode === 'ageGroup' && influenzaData.ili && influenzaData.ili.ageGroups && (
                       <Box sx={{ mt: 2, mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                        {Object.keys(influenzaData.ili.ageGroups)
+                        {sortAgeGroups(Object.keys(influenzaData.ili.ageGroups)
                           .filter(ageGroup => {
                             const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
                             return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
-                          })
-                          .sort()
+                          }))
                           .map((ageGroup) => (
                             <FormControlLabel
                               key={ageGroup}
@@ -2269,14 +2284,13 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                               },
                             }}
                           />
-                          {Object.keys(influenzaData.ili.ageGroups)
+                          {sortAgeGroups(Object.keys(influenzaData.ili.ageGroups)
                             .filter(ageGroup => {
                               // 절기 형식 제외 (예: "17/18", "24/25" 등)
                               const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
                               // 연령대 형식만 포함 (예: "0세", "1-6세", "65세 이상" 등)
                               return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
-                            })
-                            .sort()
+                            }))
                             .map((ageGroup) => (
                             <Chip
                               key={ageGroup}
@@ -2313,7 +2327,14 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                     </Typography>
                   )}
                   <Box sx={{ height: 260, mt: 3 }}>
-                    {selectedGraphId === 'ili' && viewMode === 'season' ? (
+                    {loading ? (
+                      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                        <CircularProgress size={40} />
+                        <Typography variant="body2" sx={{ color: 'rgba(148, 163, 184, 0.7)', ml: 2 }}>
+                          데이터를 불러오는 중...
+                        </Typography>
+                      </Box>
+                    ) : selectedGraphId === 'ili' && viewMode === 'season' ? (
                       // 절기별 비교 차트
                       (() => {
                         // 절기별 데이터 처리 (기존 데이터 + 체크박스로 로드한 데이터 병합)
@@ -2401,12 +2422,11 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                             </Typography>
                           );
                         }
-                        const ageGroupKeys = Object.keys(influenzaData.ili.ageGroups)
+                        const ageGroupKeys = sortAgeGroups(Object.keys(influenzaData.ili.ageGroups)
                           .filter(ageGroup => {
                             const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
                             return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
-                          })
-                          .sort()
+                          }))
                           .filter(ageGroup => selectedAgeGroups.includes(ageGroup));
                         
                         if (ageGroupKeys.length === 0) {
@@ -2542,12 +2562,11 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
             {/* 연령대별 비교 차트 선택 UI (viewMode가 'ageGroup'일 때만 표시) */}
             {selectedGraphId === 'ili' && viewMode === 'ageGroup' && influenzaData.ili && influenzaData.ili.ageGroups && (
               <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                {Object.keys(influenzaData.ili.ageGroups)
+                {sortAgeGroups(Object.keys(influenzaData.ili.ageGroups)
                   .filter(ageGroup => {
                     const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
                     return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
-                  })
-                  .sort()
+                  }))
                   .map((ageGroup) => (
                     <FormControlLabel
                       key={ageGroup}

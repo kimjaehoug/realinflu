@@ -2,6 +2,8 @@
  * CSV 파일에서 데이터를 로드하는 유틸리티 함수
  */
 
+import { getDatasetName } from './datasetMetadata';
+
 /**
  * CSV 파일을 읽어서 파싱하는 함수
  * @param {string} filePath - CSV 파일 경로
@@ -98,6 +100,9 @@ const parseCSVLine = (line) => {
  * @returns {Promise<Array>} 로드된 데이터 배열
  */
 export const loadHistoricalCSVData = async (dsid = 'ds_0101') => {
+  const dataname = getDatasetName(dsid) || dsid;
+  console.log(`📂 [CSV 로더] ${dataname} (${dsid}) CSV 데이터 로드 시작`);
+  
   const allData = [];
   const startYear = 2017;
   const endYear = 2025;
@@ -107,6 +112,7 @@ export const loadHistoricalCSVData = async (dsid = 'ds_0101') => {
   // dsid에서 숫자 추출 (예: 'ds_0101' -> '0101')
   const dsidNumber = dsid.replace('ds_', '');
   
+  let loadedYears = [];
   for (let year = startYear; year <= endYear; year++) {
     const fileName = `flu-${dsidNumber}-${year}.csv`;
     // public 폴더 기준 경로
@@ -142,38 +148,115 @@ export const loadHistoricalCSVData = async (dsid = 'ds_0101') => {
           return true;
         });
         
-        allData.push(...filteredData);
+        if (filteredData.length > 0) {
+          allData.push(...filteredData);
+          loadedYears.push(year);
+        }
       }
     } catch (error) {
       // CSV 파일 로드 실패 시 해당 연도만 건너뜀
+      console.warn(`⚠️ [CSV 로더] ${dataname} ${year}년 데이터 로드 실패:`, error.message);
     }
   }
   
+  console.log(`✅ [CSV 로더] ${dataname} (${dsid}) CSV 데이터 로드 완료: ${allData.length}건 (${loadedYears.join(', ')}년)`);
   return allData;
 };
 
 /**
  * CSV 데이터를 processETLData 형식으로 변환하는 함수
  * @param {Array} csvData - CSV 데이터 배열
+ * @param {string} dsid - 데이터셋 ID (예: 'ds_0101')
  * @returns {Array} processETLData 형식의 데이터 배열
  */
-export const convertCSVToETLFormat = (csvData) => {
+export const convertCSVToETLFormat = (csvData, dsid = 'ds_0101') => {
+  const dataname = getDatasetName(dsid) || dsid;
   return csvData.map((row, index) => {
-    // CSV 데이터를 ETL API 형식으로 변환
-    const parsedData = [{
-      '연도': row['연도'] || row['연도 '] || '',
-      '주차': row['주차'] || row['주차 '] || '',
-      '연령대': row['연령대'] || row['연령대 '] || '',
-      '의사환자 분율': row['의사환자 분율'] || row['의사환자 분율 '] || '',
-    }];
+    // 기본 필드 추출 (공백 변형 대응)
+    const year = row['연도'] || row['연도 '] || row['﻿연도'] || row['﻿연도 '] || '';
+    const week = row['주차'] || row['주차 '] || '';
+    
+    // 연령대 또는 아형 필드 확인
+    const ageGroup = row['연령대'] || row['연령대 '] || '';
+    const subtype = row['아형'] || row['아형 '] || '';
+    
+    // CSV 파일의 모든 필드를 그대로 유지 (의사환자 분율, 입원환자 수, 인플루엔자 검출률 등)
+    // processETLData에서 preferredField로 찾을 수 있도록 모든 필드를 포함
+    const parsedRow = {
+      '연도': year,
+      '주차': week,
+    };
+    
+    // 연령대 필드가 있으면 추가
+    if (ageGroup) {
+      parsedRow['연령대'] = ageGroup;
+    }
+    
+    // I-RISS (ds_0106)와 K-RISS (ds_0108)의 경우 특별 처리
+    if ((dsid === 'ds_0106' || dsid === 'ds_0108')) {
+      // 연령대 필드가 있으면 연령대별 데이터로 처리 (2017년 등 구버전 CSV)
+      if (ageGroup) {
+        // 모든 필드를 그대로 포함
+        Object.keys(row).forEach(key => {
+          if (key !== '연도' && key !== '주차' && key !== '연령대' && key !== '아형' &&
+              key !== '연도 ' && key !== '주차 ' && key !== '연령대 ' && key !== '아형 ') {
+            parsedRow[key] = row[key];
+          }
+        });
+        
+        return {
+          id: `csv_${dsid}_${index}`,
+          dsId: dsid,
+          parsedData: JSON.stringify([parsedRow]),
+          originalData: Object.values(row).join(','),
+          collectedAt: new Date().toISOString(),
+        };
+      }
+      
+      // 아형 필드만 있는 경우 (2025년 등 신버전 CSV)
+      if (subtype) {
+        // "검출률" 아형이 있으면 전체 검출률로 사용
+        if (subtype === '검출률') {
+          parsedRow['연령대'] = '전체';
+          // 인플루엔자 검출률 필드 추가
+          parsedRow['인플루엔자 검출률'] = row['인플루엔자 검출률'] || row['인플루엔자 검출률 '] || '';
+          
+          return {
+            id: `csv_${dsid}_${index}`,
+            dsId: dsid,
+            parsedData: JSON.stringify([parsedRow]),
+            originalData: Object.values(row).join(','),
+            collectedAt: new Date().toISOString(),
+          };
+        } else {
+          // 다른 아형은 건너뜀 (A, B, A(H1N1)pdm09, A(H3N2) 등)
+          return null;
+        }
+      }
+    }
+    
+    // 일반적인 경우: CSV의 모든 필드를 그대로 포함
+    // 연령대 필드가 있으면 사용, 없으면 "전체"
+    if (!ageGroup) {
+      parsedRow['연령대'] = '전체';
+    }
+    
+    // CSV의 모든 값 필드를 그대로 포함 (의사환자 분율, 입원환자 수, 인플루엔자 검출률, 응급실 인플루엔자 환자 등)
+    Object.keys(row).forEach(key => {
+      if (key !== '연도' && key !== '주차' && key !== '연령대' && key !== '아형' &&
+          key !== '연도 ' && key !== '주차 ' && key !== '연령대 ' && key !== '아형 ' &&
+          !key.includes('﻿')) {
+        parsedRow[key] = row[key];
+      }
+    });
     
     return {
-      id: `csv_${index}`,
-      dsId: 'ds_0101',
-      parsedData: JSON.stringify(parsedData),
+      id: `csv_${dsid}_${index}`,
+      dsId: dsid,
+      parsedData: JSON.stringify([parsedRow]),
       originalData: Object.values(row).join(','),
       collectedAt: new Date().toISOString(),
     };
-  });
+  }).filter(item => item !== null); // null 항목 제거
 };
 

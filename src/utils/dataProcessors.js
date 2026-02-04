@@ -3,9 +3,11 @@ import { getSeasonFromWeek, extractYearFromWeek, sortWeeksBySeason } from './sea
 /**
  * ETL API 응답 데이터를 대시보드에서 사용할 형식으로 변환하는 함수
  * @param {Array} rawData - API에서 받은 원시 데이터 배열
+ * @param {string} preferredField - 우선적으로 찾을 필드명 (기본값: '의사환자 분율')
+ * @param {Array<string>} excludedFields - 제외할 필드명 배열 (null이면 기본값 사용)
  * @returns {Object|null} 처리된 데이터 또는 null
  */
-export const processETLData = (rawData) => {
+export const processETLData = (rawData, preferredField = '의사환자 분율', excludedFields = null) => {
   try {
     if (!Array.isArray(rawData) || rawData.length === 0) {
       return null;
@@ -93,17 +95,17 @@ export const processETLData = (rawData) => {
             }
             
             // 값 필드 찾기 (의사환자 분율 우선, 입원환자 수는 제외)
-            // ds_0101은 "의사환자 분율" 데이터이므로 "의사환자 분율" 필드만 사용
+            // ds_0101(인플루엔자 의사환자 비율)은 "의사환자 분율" 데이터이므로 "의사환자 분율" 필드만 사용
             const valueFieldsFound = [];
             let valueToUse = null;
             let valueFieldName = null;
             
-            // 우선순위: "의사환자 분율" > 기타 숫자 필드
+            // 우선순위: preferredField 파라미터 > 기타 숫자 필드
             // 절기별 데이터의 경우 "입원환자 수"도 허용 (절기별 데이터는 "입원환자 수" 필드에 있을 수 있음)
-            const preferredField = '의사환자 분율';
-            const excludedFields = isSeason 
+            const defaultExcludedFields = isSeason 
               ? ['수집 기간', '주차', '연도', '﻿연도', '﻿수집 기간', '연령대'] 
-              : ['입원환자 수', '수집 기간', '주차', '연도', '﻿연도', '﻿수집 기간', '연령대'];
+              : ['수집 기간', '주차', '연도', '﻿연도', '﻿수집 기간', '연령대'];
+            const finalExcludedFields = excludedFields !== null ? excludedFields : defaultExcludedFields;
             
             // 우선적으로 "의사환자 분율" 필드 찾기
             if (row[preferredField] !== undefined) {
@@ -115,11 +117,11 @@ export const processETLData = (rawData) => {
               }
             }
             
-            // "의사환자 분율"이 없으면 다른 숫자 필드 찾기 (단, 제외 필드는 제외)
+            // preferredField가 없으면 다른 숫자 필드 찾기 (단, 제외 필드는 제외)
             if (valueToUse === null) {
               Object.keys(row).forEach((key) => {
                 // 제외 필드 확인 (정확한 매칭 + "연도" 포함 여부)
-                if (excludedFields.includes(key) || key.includes('연도') || key.includes('주차') || key.includes('수집 기간')) {
+                if (finalExcludedFields.includes(key) || key.includes('연도') || key.includes('주차') || key.includes('수집 기간')) {
                   return;
                 }
                 
@@ -157,8 +159,10 @@ export const processETLData = (rawData) => {
               }
             }
           } else {
-            // 형식 1 처리: 키 자체가 연령대인 경우
+            // 형식 1 처리: 키 자체가 연령대인 경우 또는 값 필드만 있는 경우
             const ageGroupKeysFound = [];
+            let hasAgeGroupKey = false;
+            
             Object.keys(row).forEach((key) => {
               // 메타데이터 필드는 제외
               if (key === '수집 기간' || key === '주차' || key === '연도' || key === '﻿수집 기간' || key === '연령대') {
@@ -167,6 +171,7 @@ export const processETLData = (rawData) => {
               
               // 키가 연령대인 경우 (예: "65세 이상", "0세", "1-6세" 등)
               if (key.includes('세') || key === '0세' || key === '연령미상') {
+                hasAgeGroupKey = true;
                 const value = parseFloat(row[key]);
                 if (!isNaN(value)) {
                   // 연령대 키 정규화: "65세 이상" -> "65세이상"으로 통일
@@ -179,6 +184,45 @@ export const processETLData = (rawData) => {
                 }
               }
             });
+            
+            // 연령대 키가 없는 경우: 값 필드만 있는 경우 (예: ARI)
+            if (!hasAgeGroupKey) {
+              // preferredField를 찾아서 "전체" 키로 저장
+              if (row[preferredField] !== undefined) {
+                const value = parseFloat(row[preferredField]);
+                if (!isNaN(value)) {
+                  const defaultExcludedFields = ['수집 기간', '주차', '연도', '﻿연도', '﻿수집 기간', '연령대'];
+                  const finalExcludedFields = excludedFields !== null ? excludedFields : defaultExcludedFields;
+                  
+                  // preferredField가 제외 필드에 포함되어 있지 않은 경우만 사용
+                  if (!finalExcludedFields.includes(preferredField)) {
+                    if (!weekData.values['전체']) {
+                      weekData.values['전체'] = [];
+                    }
+                    weekData.values['전체'].push(value);
+                  }
+                }
+              } else {
+                // preferredField가 없으면 다른 숫자 필드 찾기
+                Object.keys(row).forEach((key) => {
+                  const defaultExcludedFields = ['수집 기간', '주차', '연도', '﻿연도', '﻿수집 기간', '연령대'];
+                  const finalExcludedFields = excludedFields !== null ? excludedFields : defaultExcludedFields;
+                  
+                  if (finalExcludedFields.includes(key) || key.includes('연도') || key.includes('주차') || key.includes('수집 기간')) {
+                    return;
+                  }
+                  
+                  const value = parseFloat(row[key]);
+                  if (!isNaN(value) && value >= 0 && value <= 100000) {
+                    if (!weekData.values['전체']) {
+                      weekData.values['전체'] = [];
+                    }
+                    weekData.values['전체'].push(value);
+                    return; // 첫 번째 유효한 값만 사용
+                  }
+                });
+              }
+            }
           }
         });
       } catch (parseError) {
