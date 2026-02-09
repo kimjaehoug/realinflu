@@ -130,8 +130,8 @@ export const getETLDataStatisticsByDateRange = async (from, to) => {
 export const getETLDataByOrigin = async (dsid, origin) => {
   const dataname = getDatasetName(dsid) || dsid;
   try {
-    // 전체 URL 사용: http://211.238.12.60:8084/data/api/v1/etl_data/id/{{dsid}}/origin/{{origin}}
-    const fullUrl = `http:///211.238.12.60:8084/data/api/v1/etl_data/id/${dsid}/origin/${origin}`;
+    // 전체 URL 사용: http://210.117.143.180:8100/data/api/v1/etl_data/id/{{dsid}}/origin/{{origin}}
+    const fullUrl = `http://210.117.143.180:8100/data/api/v1/etl_data/id/${dsid}/origin/${origin}`;
     
     console.log(`🔵 [origin API] ${dataname} (${dsid}) 요청 URL:`, fullUrl);
     console.log(`🔵 [origin API] 요청 파라미터:`, { dataname, dsid, origin });

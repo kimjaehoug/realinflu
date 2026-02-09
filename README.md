@@ -104,13 +104,13 @@ npm run build
 
 ```env
 # Keycloak 인증 설정
-REACT_APP_KEYCLOAK_SERVER_URL=https://keycloak.211.238.12.60.nip.io:8100
+REACT_APP_KEYCLOAK_SERVER_URL=https://keycloak.210.117.143.180.nip.io:8100
 REACT_APP_KEYCLOAK_REALM=gfid-api
 REACT_APP_CLIENT_ID=Vital_Analyzer_accessor
 REACT_APP_CLIENT_SECRET=XbY2WJJZ6eA43hlipQg772dZ8hdOeKLE
 
 # API 설정
-REACT_APP_API_URL=http://211.238.12.60:8084/data/api/v1
+REACT_APP_API_URL=http://210.117.143.180:8100/data/api/v1
 REACT_APP_DSID=ds_0101
 ```
 

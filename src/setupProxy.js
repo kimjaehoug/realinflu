@@ -27,7 +27,7 @@ module.exports = function(app) {
   app.use(
     '/api-proxy',
     createProxyMiddleware({
-      target: 'http://211.238.12.60:8084',
+      target: 'http://210.117.143.180:8100',
       changeOrigin: true,
       pathRewrite: {
         '^/api-proxy': '', // /api-proxy를 제거
