@@ -107,10 +107,16 @@ const fetchIndicatorData = async (indicatorKey, config, selectedSeason, selected
     } else {
       // CSV 데이터 로드 (25/26절기가 아닌 경우)
       const csvData = await loadHistoricalCSVData(dsid);
+      console.log(`📂 [${indicatorKey}] ${dataname} CSV 원본 데이터: ${csvData.length}건`);
+
       let csvETLData = convertCSVToETLFormat(csvData, dsid);
-      
+      console.log(`📂 [${indicatorKey}] ${dataname} CSV ETL 변환: ${csvETLData.length}건`);
+
       // 해당 절기의 데이터만 필터링
       const [year1, year2] = selectedSeason.split('/').map(y => parseInt('20' + y));
+      console.log(`📂 [${indicatorKey}] ${dataname} ${selectedSeason}절기 필터링 범위: ${year1}년 36주 이상 또는 ${year2}년 35주 이하`);
+
+      const beforeFilterCount = csvETLData.length;
       csvETLData = csvETLData.filter(item => {
         try {
           const parsedData = JSON.parse(item.parsedData || '[]');
@@ -118,18 +124,27 @@ const fetchIndicatorData = async (indicatorKey, config, selectedSeason, selected
             const firstRow = parsedData[0];
             const year = parseInt(firstRow['연도'] || firstRow['﻿연도'] || '0');
             const week = parseInt(firstRow['주차'] || '0');
-            
+
             // 절기 범위: XX년 36주 ~ YY년 35주
-            if (year === year1 && week >= 36) return true;
-            if (year === year2 && week <= 35) return true;
-            return false;
+            const isInRange = (year === year1 && week >= 36) || (year === year2 && week <= 35);
+
+            if (isInRange) {
+              console.log(`✅ [${indicatorKey}] ${dataname} 포함: ${year}년 ${week}주`);
+              return true;
+            } else {
+              console.log(`❌ [${indicatorKey}] ${dataname} 제외: ${year}년 ${week}주`);
+              return false;
+            }
           }
         } catch (e) {
+          console.warn(`⚠️ [${indicatorKey}] ${dataname} 파싱 실패:`, e);
           return false;
         }
         return false;
       });
-      
+
+      console.log(`📂 [${indicatorKey}] ${dataname} 절기 필터링 결과: ${beforeFilterCount}건 → ${csvETLData.length}건`);
+
       allRawData = csvETLData;
     }
     
@@ -190,7 +205,16 @@ const fetchIndicatorData = async (indicatorKey, config, selectedSeason, selected
     
     const finalWeeks = weekValuePairs.map(pair => pair.week);
     const values = weekValuePairs.map(pair => pair.value);
-    
+
+    console.log(`✅ [${indicatorKey}] ${dataname} 데이터 처리 완료:`, {
+      주차수: finalWeeks.length,
+      값수: values.length,
+      첫주차: finalWeeks[0],
+      마지막주차: finalWeeks[finalWeeks.length - 1],
+      첫값: values[0],
+      마지막값: values[values.length - 1],
+    });
+
     // ILI의 경우 연령대별 데이터와 절기별 데이터도 포함
     if (indicatorKey === 'ili') {
       const ageGroupData = {};

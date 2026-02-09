@@ -1,8 +1,8 @@
 import axios from 'axios';
 import { getAccessToken } from './auth';
 
-// 직접 URL 사용 (211.238.12.60:8084)
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://211.238.12.60:8084/data/api/v1';
+// 직접 URL 사용 (Keycloak)
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://keycloak.210.117.143.180.nip.io:8100/data/api/v1';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,

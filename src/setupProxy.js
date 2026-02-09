@@ -7,7 +7,7 @@ module.exports = function(app) {
   app.use(
     '/keycloak-proxy',
     createProxyMiddleware({
-      target: 'https://keycloak.211.238.12.60.nip.io:8100',
+      target: 'https://keycloak.210.117.143.180.nip.io:8100',
       changeOrigin: true,
       secure: false, // SSL 인증서 검증 비활성화 (개발 환경)
       pathRewrite: {
