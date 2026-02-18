@@ -1,346 +1,407 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Dialog,
   DialogTitle,
   DialogContent,
-  Typography,
-  IconButton,
   Box,
-  Stack,
+  IconButton,
+  Typography,
+  Chip,
   TextField,
-  Button,
-  CircularProgress,
-  Alert,
+  InputAdornment,
 } from '@mui/material';
-import { FiX } from 'react-icons/fi';
+import { Close as CloseIcon, ArrowBack as ArrowBackIcon, Search as SearchIcon } from '@mui/icons-material';
+import { MapContainer, TileLayer, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import { geoMercator, geoPath, geoCentroid } from 'd3-geo';
+import { feature as topojsonFeature } from 'topojson-client';
+import 'leaflet/dist/leaflet.css';
+import provincesGeo from '../data/skorea_provinces_geo_simple.json';
 
-const HospitalSearch = ({ open, onClose }) => {
-  const [searchKeyword, setSearchKeyword] = useState('');
-  const [hospitals, setHospitals] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [map, setMap] = useState(null);
-  const [markers, setMarkers] = useState([]);
-  const [infoWindows, setInfoWindows] = useState([]);
-  const mapContainerRef = useRef(null);
-  const psRef = useRef(null); // Places 서비스 참조
+// GeoJSON 시/도명 → 앱 지역 키 (클릭 시 setSelectedRegion용)
+const GEO_NAME_TO_REGION = {
+  서울특별시: '서울', 부산광역시: '부산', 대구광역시: '대구', 인천광역시: '인천',
+  광주광역시: '광주', 대전광역시: '대전', 울산광역시: '울산', 세종특별자치시: '세종',
+  경기도: '경기', 강원도: '강원', 충청북도: '충북', 충청남도: '충남',
+  전라북도: '전북', 전라남도: '전남', 경상북도: '경북', 경상남도: '경남',
+  제주특별자치도: '제주'
+};
 
-  // 카카오맵 스크립트 로드 확인 및 초기화
-  useEffect(() => {
-    console.log('🗺️ 지도 초기화 useEffect 실행됨, open:', open);
-    
-    if (!open) return;
+// 지역별 대략 중심 좌표 (시/도 → [lat, lng])
+const REGION_CENTERS = {
+  서울: [37.57, 127.0], 인천: [37.46, 126.71], 경기: [37.4, 127.1], 강원: [37.8, 128.2],
+  충북: [36.6, 127.5], 충남: [36.5, 127.0], 대전: [36.35, 127.38], 세종: [36.48, 127.29],
+  경북: [36.5, 128.7], 대구: [35.87, 128.6], 울산: [35.54, 129.3], 경남: [35.2, 128.7],
+  부산: [35.18, 129.08], 전북: [35.8, 127.1], 광주: [35.16, 126.91], 전남: [34.8, 126.9],
+  제주: [33.5, 126.5]
+};
 
-    // 카카오맵 스크립트 로드 함수
-    const loadKakaoMapScript = () => {
-      return new Promise((resolve, reject) => {
-        // 이미 로드되어 있으면 바로 resolve
-        if (window.kakao && window.kakao.maps && window.kakao.maps.services) {
-          console.log('✅ 카카오맵 API 이미 로드됨');
-          resolve();
-          return;
-        }
+// 시/도 → TopoJSON 행정코드 앞 2자리 (시/군/구 필터용)
+const REGION_TO_CODE_PREFIX = {
+  서울: '11', 부산: '21', 대구: '22', 인천: '23', 광주: '24', 대전: '25', 울산: '26', 세종: '29',
+  경기: '31', 강원: '32', 충북: '33', 충남: '34', 전북: '35', 전남: '36', 경북: '37', 경남: '38', 제주: '39'
+};
 
-        // 스크립트가 이미 있는지 확인하고 로드 대기
-        const existingScript = document.querySelector('script[src*="dapi.kakao.com"]');
-        if (existingScript) {
-          console.log('⏳ 카카오맵 스크립트 로딩 중...');
-          
-          // 이미 로드되었는지 확인
-          const checkLoaded = setInterval(() => {
-            if (window.kakao && window.kakao.maps && window.kakao.maps.services) {
-              clearInterval(checkLoaded);
-              console.log('✅ 카카오맵 스크립트 로드 완료');
-              resolve();
-            }
-          }, 100);
+// GeoJSON 시/군/구명 정규화 (병원 데이터 없이 지도용)
+function normalizeDistrictName(geoName) {
+  if (!geoName || typeof geoName !== 'string') return '';
+  return geoName.replace(/시/g, '').trim();
+}
 
-          // 최대 10초 대기
-          setTimeout(() => {
-            clearInterval(checkLoaded);
-            if (!window.kakao || !window.kakao.maps) {
-              reject(new Error('카카오맵 스크립트 로드 시간 초과'));
-            }
-          }, 10000);
+// 대한민국 시/도 지도 (SVG, d3-geo, 클릭 시 지역 선택)
+function KoreaGeoMap({ geoData, onSelectRegion }) {
+  const width = 480;
+  const height = 560;
+  const { projection, path, features } = useMemo(() => {
+    if (!geoData?.features?.length) return { projection: null, path: null, features: [] };
+    const projection = geoMercator().fitSize([width, height], geoData);
+    const path = geoPath().projection(projection);
+    return { projection, path, features: geoData.features };
+  }, [geoData]);
 
-          existingScript.addEventListener('error', () => {
-            clearInterval(checkLoaded);
-            reject(new Error('카카오맵 스크립트 로드 실패'));
-          });
-          return;
-        }
+  if (!projection || !path || !features.length) return null;
 
-        // 스크립트 동적 로드
-        console.log('📥 카카오맵 스크립트 동적 로드 시작');
-        const script = document.createElement('script');
-        script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=a5e26726ce3b9dd59609c4494e21adec&libraries=services';
-        script.async = true;
-        script.onload = () => {
-          console.log('✅ 카카오맵 스크립트 로드 완료');
-          // 약간의 지연 후 resolve (API 초기화 시간 확보)
-          setTimeout(() => {
-            if (window.kakao && window.kakao.maps && window.kakao.maps.services) {
-              resolve();
-            } else {
-              // API 키 오류 확인
-              if (window.kakao && window.kakao.maps && window.kakao.maps.load) {
-                console.error('❌ 카카오맵 API 초기화 실패 - API 키 또는 도메인 등록 확인 필요');
-                reject(new Error('카카오맵 API 키가 유효하지 않거나 도메인이 등록되지 않았습니다.'));
-              } else {
-                reject(new Error('카카오맵 API 초기화 실패'));
-              }
-            }
-          }, 500);
-        };
-        script.onerror = (error) => {
-          console.error('❌ 카카오맵 스크립트 로드 실패:', error);
-          reject(new Error('카카오맵 스크립트를 로드할 수 없습니다. 네트워크 연결을 확인해주세요.'));
-        };
-        document.head.appendChild(script);
-      });
-    };
-
-    // 지도 초기화 함수
-    const initializeMap = () => {
-      if (!mapContainerRef.current) {
-        console.log('⚠️ mapContainerRef.current가 없음');
-        return;
-      }
-
-      if (window.kakao && window.kakao.maps && window.kakao.maps.services) {
-        try {
-          console.log('✅ 카카오맵 API 확인됨, 지도 생성 시작');
-          // 지도 생성
-          const mapOption = {
-            center: new window.kakao.maps.LatLng(37.5665, 126.9780), // 서울 중심
-            level: 5,
-          };
-          const newMap = new window.kakao.maps.Map(mapContainerRef.current, mapOption);
-          console.log('✅ 지도 생성 완료');
-          setMap(newMap);
-
-          // Places 서비스 생성
-          const ps = new window.kakao.maps.services.Places();
-          psRef.current = ps;
-          console.log('✅ Places 서비스 생성 완료');
-
-          // 지도 위에 검색 컨트롤 추가
-          const mapTypeControl = new window.kakao.maps.MapTypeControl();
-          newMap.addControl(mapTypeControl, window.kakao.maps.ControlPosition.TOPRIGHT);
-
-          // 줌 컨트롤 추가
-          const zoomControl = new window.kakao.maps.ZoomControl();
-          newMap.addControl(zoomControl, window.kakao.maps.ControlPosition.RIGHT);
-
-          console.log('✅ 카카오맵 초기화 완료');
-          setError(null);
-        } catch (error) {
-          console.error('❌ 카카오맵 초기화 오류:', error);
-          const errorMsg = error.message || '알 수 없는 오류';
-          
-          // API 키 오류인 경우
-          if (errorMsg.includes('Invalid') || errorMsg.includes('key') || errorMsg.includes('unauthorized')) {
-            setError(
-              '카카오맵 API 키 오류입니다.\n' +
-              '카카오 개발자 콘솔에서 API 키와 도메인 설정을 확인해주세요.'
-            );
-          } else {
-            setError('지도를 불러오는 중 오류가 발생했습니다: ' + errorMsg);
-          }
-        }
-      } else {
-        console.log('❌ 카카오맵 API를 찾을 수 없음');
-        setError(
-          '카카오맵 API를 불러올 수 없습니다.\n' +
-          '카카오 개발자 콘솔에서 API 키와 도메인 설정을 확인해주세요.'
-        );
-      }
-    };
-
-    // 스크립트 로드 후 지도 초기화
-    const init = async () => {
-      try {
-        await loadKakaoMapScript();
-        // 다이얼로그가 완전히 렌더링된 후 지도 초기화
-        setTimeout(initializeMap, 100);
-      } catch (error) {
-        console.error('❌ 카카오맵 스크립트 로드 실패:', error);
-        const errorMessage = error.message || '알 수 없는 오류';
-        
-        // API 키 관련 오류인 경우 더 자세한 안내
-        if (errorMessage.includes('API 키') || errorMessage.includes('도메인')) {
-          setError(
-            '카카오맵 API 키 설정이 필요합니다.\n' +
-            '1. 카카오 개발자 콘솔(https://developers.kakao.com)에서 앱 키 확인\n' +
-            '2. 플랫폼 설정에서 현재 도메인(localhost 등) 등록\n' +
-            '3. JavaScript 키를 사용하여 API 호출'
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="auto" style={{ maxWidth: width, filter: 'drop-shadow(0 4px 16px rgba(0,0,0,0.18))' }}>
+      <g>
+        {features.map((feature, i) => {
+          const name = feature.properties?.name;
+          const regionKey = name ? (GEO_NAME_TO_REGION[name] || name) : null;
+          const d = path(feature);
+          if (!d) return null;
+          return (
+            <path
+              key={feature.properties?.code ?? i}
+              d={d}
+              fill="#e8e8e8"
+              stroke="#9a9a9a"
+              strokeWidth="0.9"
+              style={{ cursor: regionKey ? 'pointer' : 'default' }}
+              onClick={() => regionKey && onSelectRegion(regionKey)}
+            />
           );
-        } else {
-          setError(`카카오맵을 불러올 수 없습니다: ${errorMessage}\n페이지를 새로고침해주세요.`);
-        }
+        })}
+      </g>
+      <g style={{ pointerEvents: 'none' }}>
+        {features.map((feature, i) => {
+          const name = feature.properties?.name;
+          if (!name) return null;
+          let [x, y] = [0, 0];
+          try {
+            const c = geoCentroid(feature);
+            [x, y] = projection(c) || [0, 0];
+          } catch (_) {}
+          if (name === '경기도') { x = 200; y = 98; } else if (name === '충청남도') { x = 168; y = 238; }
+          const inBounds = x >= 0 && x <= width && y >= 0 && y <= height;
+          if (!inBounds) return null;
+          return (
+            <text key={`label-${i}`} x={x} y={y} textAnchor="middle" dominantBaseline="middle" fill="#222" fontSize="10" fontWeight="600">
+              {name}
+            </text>
+          );
+        })}
+      </g>
+    </svg>
+  );
+}
+
+// 선택한 도 내 시/군/구 SVG 지도 (클릭 시 구 선택)
+const DISTRICT_MAP_WIDTH = 480;
+const DISTRICT_MAP_HEIGHT = 520;
+
+function ProvinceDistrictMap({ districtGeoData, onSelectDistrict }) {
+  const { projection, path, features } = useMemo(() => {
+    if (!districtGeoData?.features?.length) return { projection: null, path: null, features: [] };
+    const projection = geoMercator().fitSize([DISTRICT_MAP_WIDTH, DISTRICT_MAP_HEIGHT], districtGeoData);
+    const path = geoPath().projection(projection);
+    return { projection, path, features: districtGeoData.features };
+  }, [districtGeoData]);
+
+  if (!projection || !path || !features.length) return null;
+
+  return (
+    <svg viewBox={`0 0 ${DISTRICT_MAP_WIDTH} ${DISTRICT_MAP_HEIGHT}`} width="100%" height="auto" style={{ maxWidth: DISTRICT_MAP_WIDTH, filter: 'drop-shadow(0 4px 16px rgba(0,0,0,0.18))' }}>
+      <g>
+        {features.map((feature, i) => {
+          const name = feature.properties?.name;
+          const d = path(feature);
+          if (!d) return null;
+          return (
+            <path
+              key={feature.properties?.code ?? i}
+              d={d}
+              fill="#e8e8e8"
+              stroke="#9a9a9a"
+              strokeWidth="0.9"
+              style={{ cursor: 'pointer' }}
+              onClick={() => name && onSelectDistrict(name)}
+            />
+          );
+        })}
+      </g>
+      <g style={{ pointerEvents: 'none' }}>
+        {features.map((feature, i) => {
+          const name = feature.properties?.name;
+          if (!name) return null;
+          let [x, y] = [0, 0];
+          try {
+            const c = geoCentroid(feature);
+            [x, y] = projection(c) || [0, 0];
+          } catch (_) {}
+          const inBounds = x >= 0 && x <= DISTRICT_MAP_WIDTH && y >= 0 && y <= DISTRICT_MAP_HEIGHT;
+          if (!inBounds) return null;
+          return (
+            <text key={`label-${i}`} x={x} y={y} textAnchor="middle" dominantBaseline="middle" fill="#222" fontSize="9" fontWeight="600">
+              {name.length > 6 ? name.slice(0, 5) + '…' : name}
+            </text>
+          );
+        })}
+      </g>
+    </svg>
+  );
+}
+
+// GeoJSON geometry → Leaflet bounds
+function boundsFromGeometry(geometry) {
+  if (!geometry?.coordinates) return null;
+  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+  const addPoint = (p) => {
+    if (Array.isArray(p) && p.length >= 2 && typeof p[0] === 'number' && typeof p[1] === 'number') {
+      const [lng, lat] = p;
+      if (Number.isFinite(lng) && Number.isFinite(lat)) {
+        minLng = Math.min(minLng, lng); minLat = Math.min(minLat, lat);
+        maxLng = Math.max(maxLng, lng); maxLat = Math.max(maxLat, lat);
+      }
+    }
+  };
+  const walk = (arr) => {
+    if (!Array.isArray(arr)) return;
+    if (arr.length >= 2 && typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+      addPoint(arr);
+      return;
+    }
+    arr.forEach(walk);
+  };
+  walk(geometry.coordinates);
+  if (minLng === Infinity) return null;
+  return L.latLngBounds([minLat, minLng], [maxLat, maxLng]);
+}
+
+function extractOuterRings(geometry) {
+  if (!geometry?.coordinates) return [];
+  const toLatLngRing = (ring) => ring.map(([lng, lat]) => [lat, lng]);
+  if (geometry.type === 'Polygon') {
+    return Array.isArray(geometry.coordinates[0]) ? [toLatLngRing(geometry.coordinates[0])] : [];
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates
+      .map((polygon) => (Array.isArray(polygon?.[0]) ? toLatLngRing(polygon[0]) : null))
+      .filter(Boolean);
+  }
+  return [];
+}
+
+// 선택한 시/군/구 경계 강조 + 외부 블러 마스크
+function DistrictBoundaryOverlay({ districtFeature }) {
+  const map = useMap();
+  const layersRef = useRef({ mask: null, outline: null });
+
+  useEffect(() => {
+    const paneMask = map.getPane('district-mask') || map.createPane('district-mask');
+    paneMask.style.zIndex = 450;
+    paneMask.style.pointerEvents = 'none';
+    paneMask.style.backdropFilter = 'blur(10px)';
+    paneMask.style.webkitBackdropFilter = 'blur(10px)';
+    paneMask.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+
+    const paneOutline = map.getPane('district-outline') || map.createPane('district-outline');
+    paneOutline.style.zIndex = 460;
+    paneOutline.style.pointerEvents = 'none';
+
+    if (layersRef.current.mask) {
+      map.removeLayer(layersRef.current.mask);
+      layersRef.current.mask = null;
+    }
+    if (layersRef.current.outline) {
+      map.removeLayer(layersRef.current.outline);
+      layersRef.current.outline = null;
+    }
+
+    if (!districtFeature?.geometry) return undefined;
+
+    const worldRing = [[-90, -180], [-90, 180], [90, 180], [90, -180]];
+    const holes = extractOuterRings(districtFeature.geometry);
+    const maskLayer = L.polygon([worldRing, ...holes], {
+      pane: 'district-mask',
+      stroke: false,
+      fillColor: '#ffffff',
+      fillOpacity: 0.45
+    }).addTo(map);
+
+    const outlineLayer = L.geoJSON(districtFeature, {
+      pane: 'district-outline',
+      style: { color: 'rgb(45, 90, 255)', weight: 2, opacity: 1, fillOpacity: 0 }
+    }).addTo(map);
+
+    layersRef.current = { mask: maskLayer, outline: outlineLayer };
+
+    return () => {
+      if (layersRef.current.mask) map.removeLayer(layersRef.current.mask);
+      if (layersRef.current.outline) map.removeLayer(layersRef.current.outline);
+      layersRef.current = { mask: null, outline: null };
+    };
+  }, [map, districtFeature]);
+
+  return null;
+}
+
+// 지도 뷰포트: 시/군/구 bounds 또는 지역 중심으로 확대
+function MapViewport({ districtBounds, regionCenter, hasDistrictSelected }) {
+  const map = useMap();
+  useEffect(() => {
+    const apply = () => {
+      if (districtBounds) {
+        map.fitBounds(districtBounds, { padding: [40, 40], maxZoom: 14 });
+      } else if (hasDistrictSelected && regionCenter) {
+        map.setView(regionCenter, 11, { animate: false });
       }
     };
+    if (typeof map.whenReady === 'function') map.whenReady(apply);
+    else apply();
+  }, [map, districtBounds, hasDistrictSelected, regionCenter]);
+  return null;
+}
 
-    init();
+// 지도 데이터: https://github.com/southkorea/southkorea-maps (시/도는 번들 JSON 사용, 시군구는 타임아웃 적용)
+const MUNICIPALITIES_TOPOLOGY_URL = 'https://raw.githubusercontent.com/southkorea/southkorea-maps/master/kostat/2018/json/skorea-municipalities-2018-topo-simple.json';
+const MUNICIPALITIES_OBJECT_NAME = 'skorea_municipalities_2018_geo';
+const BASE_MUNICIPALITIES_BY_REGION_URL = 'https://raw.githubusercontent.com/southkorea/southkorea-maps/master/kostat/2018/json/by-province';
+const FETCH_TIMEOUT_MS = 6000;
+
+function fetchWithTimeout(url, ms = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { signal: controller.signal })
+    .then((r) => {
+      clearTimeout(id);
+      return r;
+    })
+    .catch((err) => {
+      clearTimeout(id);
+      throw err;
+    });
+}
+
+export default function HospitalSearch({ open, onClose }) {
+  const [selectedRegion, setSelectedRegion] = useState(null);
+  const [selectedDistrict, setSelectedDistrict] = useState(null);
+  const [showMapForRegion, setShowMapForRegion] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [geoData] = useState(() => (provincesGeo?.features ? provincesGeo : null));
+  const [municipalityTopo, setMunicipalityTopo] = useState(null);
+  const [municipalityTopoLoading, setMunicipalityTopoLoading] = useState(false);
+  const [districtGeoByRegion, setDistrictGeoByRegion] = useState(null);
+  const [districtGeoByRegionLoading, setDistrictGeoByRegionLoading] = useState(false);
+
+  const detailEnterStyle = {
+    animation: 'districtEnter 320ms ease-out',
+    '@keyframes districtEnter': {
+      '0%': { opacity: 0, transform: 'translateY(10px) scale(0.985)' },
+      '100%': { opacity: 1, transform: 'translateY(0) scale(1)' }
+    }
+  };
+
+  // 전국 시/군/구 TopoJSON 로드 (타임아웃으로 무한 로딩 방지)
+  useEffect(() => {
+    if (!open) return;
+    setMunicipalityTopoLoading(true);
+    fetchWithTimeout(MUNICIPALITIES_TOPOLOGY_URL)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error())))
+      .then((data) => data && setMunicipalityTopo(data))
+      .catch(() => setMunicipalityTopo(null))
+      .finally(() => setMunicipalityTopoLoading(false));
   }, [open]);
 
-  // 기존 마커 제거
-  const removeMarkers = () => {
-    markers.forEach(marker => marker.setMap(null));
-    infoWindows.forEach(infoWindow => infoWindow.close());
-    setMarkers([]);
-    setInfoWindows([]);
-  };
-
-  // 병원 검색 함수
-  const searchHospitals = () => {
-    console.log('🔍 검색 함수 호출됨');
-    console.log('검색어:', searchKeyword);
-    console.log('psRef.current:', psRef.current);
-    console.log('map:', map);
-    console.log('window.kakao:', window.kakao);
-    
-    if (!searchKeyword.trim()) {
-      console.log('❌ 검색어가 비어있음');
-      setError('검색어를 입력해주세요.');
+  // 선택한 시/도에 해당하는 시/군/구 GeoJSON (도별 파일 우선, 타임아웃 적용)
+  useEffect(() => {
+    if (!open || !selectedRegion) {
+      setDistrictGeoByRegion(null);
       return;
     }
-
-    if (!psRef.current || !map) {
-      console.log('❌ 지도 또는 Places 서비스가 준비되지 않음');
-      console.log('psRef.current:', psRef.current);
-      console.log('map:', map);
-      setError('지도가 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요.');
+    const code = REGION_TO_CODE_PREFIX[selectedRegion];
+    if (!code) {
+      setDistrictGeoByRegion(null);
       return;
     }
-
-    console.log('✅ 검색 시작');
-    setLoading(true);
-    setError(null);
-    removeMarkers();
-
-    // 검색 키워드에 "병원" 추가 (더 정확한 검색을 위해)
-    const keyword = searchKeyword.trim().includes('병원') 
-      ? searchKeyword.trim() 
-      : `${searchKeyword.trim()} 병원`;
-
-    // 키워드로 장소 검색
-    console.log('검색 시작:', keyword);
-    
-    psRef.current.keywordSearch(keyword, (data, status, pagination) => {
-      setLoading(false);
-      console.log('검색 결과:', { status, dataLength: data?.length, data });
-
-      if (status === window.kakao.maps.services.Status.OK) {
-        // 병원만 필터링 (카테고리 코드: HP8 - 병원)
-        const hospitalData = data.filter(
-          place => {
-            const isHospital = place.category_group_code === 'HP8' || 
-                             (place.category_name && place.category_name.includes('병원')) ||
-                             (place.place_name && place.place_name.includes('병원'));
-            return isHospital;
-          }
-        );
-
-        console.log('필터링된 병원 데이터:', hospitalData.length, hospitalData);
-
-        if (hospitalData.length === 0) {
-          // 병원 필터링 결과가 없으면 전체 결과 중 병원 관련 항목만 표시
-          const allHospitalData = data.filter(
-            place => place.place_name && (
-              place.place_name.includes('병원') ||
-              place.place_name.includes('의원') ||
-              place.place_name.includes('클리닉') ||
-              place.category_name?.includes('병원') ||
-              place.category_name?.includes('의원')
-            )
-          );
-          
-          if (allHospitalData.length === 0) {
-            setError('검색 결과가 없습니다. 다른 지역명으로 검색해보세요.');
-            setHospitals([]);
-            return;
-          }
-          
-          setHospitals(allHospitalData);
-          displayHospitalsOnMap(allHospitalData);
+    setDistrictGeoByRegionLoading(true);
+    const url = `${BASE_MUNICIPALITIES_BY_REGION_URL}/${code}.json`;
+    fetchWithTimeout(url)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error())))
+      .then((data) => {
+        if (data?.type === 'FeatureCollection' && Array.isArray(data.features) && data.features.length > 0) {
+          setDistrictGeoByRegion(data);
         } else {
-          setHospitals(hospitalData);
-          displayHospitalsOnMap(hospitalData);
+          setDistrictGeoByRegion(null);
         }
-      } else if (status === window.kakao.maps.services.Status.ZERO_RESULT) {
-        setError('검색 결과가 없습니다. 다른 지역명으로 검색해보세요.');
-        setHospitals([]);
-      } else if (status === window.kakao.maps.services.Status.ERROR) {
-        setError('검색 중 오류가 발생했습니다. 다시 시도해주세요.');
-        setHospitals([]);
-      }
-    });
+      })
+      .catch(() => setDistrictGeoByRegion(null))
+      .finally(() => setDistrictGeoByRegionLoading(false));
+  }, [open, selectedRegion]);
+
+  // 현재 단계에서 쓰는 시/군/구 GeoJSON (도별 파일 없으면 TopoJSON에서 코드로 필터)
+  const districtGeoDataForRegion = useMemo(() => {
+    if (!selectedRegion) return null;
+    if (districtGeoByRegion?.features?.length > 0) return districtGeoByRegion;
+    if (!municipalityTopo) return null;
+    const prefix = REGION_TO_CODE_PREFIX[selectedRegion];
+    if (!prefix) return null;
+    const object = municipalityTopo.objects?.[MUNICIPALITIES_OBJECT_NAME];
+    if (!object) return null;
+    const full = topojsonFeature(municipalityTopo, object);
+    const fullCollection = full?.type === 'FeatureCollection' ? full : (full ? { type: 'FeatureCollection', features: [full] } : null);
+    if (!fullCollection?.features) return null;
+    const filtered = fullCollection.features.filter((f) => (String(f.properties?.code || '')).startsWith(prefix));
+    return filtered.length ? { type: 'FeatureCollection', features: filtered } : null;
+  }, [selectedRegion, municipalityTopo, districtGeoByRegion]);
+
+  const selectedDistrictFeature = useMemo(() => {
+    if (!selectedDistrict || !districtGeoDataForRegion?.features) return null;
+    const norm = normalizeDistrictName(selectedDistrict);
+    return districtGeoDataForRegion.features.find(
+      (f) => (f.properties?.name || '') === selectedDistrict || normalizeDistrictName(f.properties?.name) === norm
+    );
+  }, [selectedDistrict, districtGeoDataForRegion]);
+
+  const selectedDistrictBounds = useMemo(() => {
+    if (!selectedDistrictFeature?.geometry) return null;
+    return boundsFromGeometry(selectedDistrictFeature.geometry);
+  }, [selectedDistrictFeature]);
+
+  const handleClose = () => {
+    setSelectedRegion(null);
+    setSelectedDistrict(null);
+    setShowMapForRegion(false);
+    setSearchQuery('');
+    onClose();
   };
 
-  // 지도에 병원 표시 함수
-  const displayHospitalsOnMap = (hospitalData) => {
-    if (!map || !hospitalData || hospitalData.length === 0) return;
-
-    // 지도 중심 이동
-    const bounds = new window.kakao.maps.LatLngBounds();
-    const newMarkers = [];
-    const newInfoWindows = [];
-
-    hospitalData.forEach((place, index) => {
-      const position = new window.kakao.maps.LatLng(place.y, place.x);
-      bounds.extend(position);
-
-      // 마커 생성
-      const marker = new window.kakao.maps.Marker({
-        position: position,
-        map: map,
-      });
-
-      // 인포윈도우 생성
-      const infoWindow = new window.kakao.maps.InfoWindow({
-        content: `
-          <div style="padding:10px;min-width:150px;">
-            <div style="font-weight:bold;font-size:14px;margin-bottom:5px;">${place.place_name}</div>
-            <div style="font-size:12px;color:#666;margin-bottom:3px;">${place.road_address_name || place.address_name}</div>
-            ${place.phone ? `<div style="font-size:12px;color:#666;">${place.phone}</div>` : ''}
-          </div>
-        `,
-      });
-
-      // 마커 클릭 이벤트
-      window.kakao.maps.event.addListener(marker, 'click', () => {
-        // 다른 인포윈도우 닫기
-        newInfoWindows.forEach(iw => iw.close());
-        infoWindow.open(map, marker);
-      });
-
-      newMarkers.push(marker);
-      newInfoWindows.push(infoWindow);
-    });
-
-    setMarkers(newMarkers);
-    setInfoWindows(newInfoWindows);
-
-    // 지도 범위 조정
-    map.setBounds(bounds);
-  };
-
-  // 엔터 키로 검색
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      searchHospitals();
+  const handleBack = () => {
+    if (showMapForRegion) {
+      setShowMapForRegion(false);
+      setSelectedDistrict(null);
+    } else {
+      setSelectedRegion(null);
     }
   };
 
-  // 다이얼로그 닫기 시 초기화
-  const handleClose = () => {
-    removeMarkers();
-    setSearchKeyword('');
-    setHospitals([]);
-    setError(null);
-    setLoading(false);
-    onClose();
+  const handleSelectDistrict = (district) => {
+    setSelectedDistrict(district);
+    setShowMapForRegion(true);
+  };
+
+  const handleSelectAll = () => {
+    setSelectedDistrict(null);
+    setShowMapForRegion(true);
   };
 
   return (
@@ -351,11 +412,12 @@ const HospitalSearch = ({ open, onClose }) => {
       fullWidth
       PaperProps={{
         sx: {
-          backgroundColor: 'rgba(255, 255, 255, 0.98)',
-          borderRadius: 3,
-          border: '1px solid rgba(203, 213, 225, 0.5)',
+          borderRadius: '16px',
           overflow: 'hidden',
-        },
+          backgroundColor: '#ffffff',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+          border: '1px solid #e8e8e9'
+        }
       }}
     >
       <DialogTitle
@@ -363,226 +425,120 @@ const HospitalSearch = ({ open, onClose }) => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          pr: 2.5,
-          pl: 3,
+          color: '#252525',
+          borderBottom: '1px solid #e8e8e9',
           py: 2,
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          borderBottom: '1px solid rgba(203, 213, 225, 0.4)',
+          fontFamily: "'PyeojinGothic', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif",
+          fontWeight: 700
         }}
       >
-        <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#1f2937' }}>
-          근처 병원찾기
-        </Typography>
-        <IconButton onClick={handleClose} sx={{ color: '#6b7280' }}>
-          <FiX size={18} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {(selectedRegion || showMapForRegion) && (
+            <IconButton onClick={handleBack} sx={{ color: '#626262', mr: 0.5 }} size="small">
+              <ArrowBackIcon />
+            </IconButton>
+          )}
+          <span>
+            {selectedRegion
+              ? showMapForRegion
+                ? selectedDistrict
+                  ? `${selectedRegion} > ${selectedDistrict}`
+                  : selectedRegion
+                : `${selectedRegion} - 시/군/구 선택`
+              : '근처 병원찾기'}
+          </span>
+        </Box>
+        <IconButton onClick={handleClose} sx={{ color: '#626262' }} size="small">
+          <CloseIcon />
         </IconButton>
       </DialogTitle>
-      <DialogContent sx={{ backgroundColor: 'rgba(248, 250, 252, 0.95)', p: 3 }}>
-        <Stack spacing={3}>
-          {/* 검색 박스 */}
-          <Box
-            sx={{
-              backgroundColor: 'rgba(255, 255, 255, 0.95)',
-              borderRadius: 3,
-              border: '1px solid rgba(203, 213, 225, 0.8)',
-              p: 3,
-            }}
-          >
-            <Typography variant="body2" sx={{ color: '#1f2937', fontWeight: 600, mb: 2 }}>
-              지역을 입력하여 병원을 검색하세요
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1 }}>
+
+      <DialogContent sx={{ p: 0, backgroundColor: '#fbfbfc', minHeight: 560 }}>
+        {!selectedRegion ? (
+          <Box sx={{ p: 3 }}>
+            <Box sx={{ mb: 2 }}>
               <TextField
                 fullWidth
-                placeholder="지역명을 입력하세요 (예: 강남구, 서초구, 서울시 강남구)"
-                value={searchKeyword}
-                onChange={(e) => setSearchKeyword(e.target.value)}
-                onKeyPress={handleKeyPress}
-                disabled={loading}
-                sx={{
-                  '& .MuiOutlinedInput-root': {
-                    backgroundColor: 'rgba(248, 250, 252, 0.9)',
-                    '&:hover fieldset': {
-                      borderColor: '#38bdf8',
-                    },
-                    '&.Mui-focused fieldset': {
-                      borderColor: '#38bdf8',
-                    },
+                placeholder="병원명 또는 주소 검색 (예: 강남구, 서울아산병원)"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                size="small"
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon sx={{ color: '#9ca3af' }} />
+                    </InputAdornment>
+                  ),
+                  sx: {
+                    backgroundColor: '#ffffff',
+                    borderRadius: '10px',
+                    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#e5e7eb' },
+                    '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#cbd5e1' },
+                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#3b82f6', borderWidth: 2 },
                   },
                 }}
               />
-              <Button
-                variant="contained"
-                onClick={() => {
-                  console.log('🔘 검색 버튼 클릭됨');
-                  searchHospitals();
-                }}
-                disabled={loading || !searchKeyword.trim()}
-                sx={{
-                  px: 3,
-                  py: 1.5,
-                  backgroundColor: '#38bdf8',
-                  color: 'white',
-                  fontWeight: 600,
-                  fontSize: '14px',
-                  '&:hover': {
-                    backgroundColor: '#0ea5e9',
-                  },
-                  '&:disabled': {
-                    backgroundColor: 'rgba(148, 163, 184, 0.4)',
-                  },
-                  minWidth: 100,
-                }}
-              >
-                {loading ? <CircularProgress size={20} color="inherit" /> : '검색'}
-              </Button>
             </Box>
-            {error && (
-              <Alert severity="error" sx={{ mt: 2 }}>
-                {error}
-              </Alert>
-            )}
-            {hospitals.length > 0 && (
-              <Alert severity="success" sx={{ mt: 2 }}>
-                {hospitals.length}개의 병원을 찾았습니다.
-              </Alert>
-            )}
-          </Box>
-
-          {/* 카카오맵 */}
-          <Box
-            sx={{
-              backgroundColor: 'rgba(255, 255, 255, 0.95)',
-              borderRadius: 3,
-              border: '1px solid rgba(203, 213, 225, 0.8)',
-              overflow: 'hidden',
-            }}
-          >
-            <Typography 
-              variant="subtitle2" 
-              sx={{ 
-                color: '#1f2937', 
-                fontWeight: 600, 
-                p: 2, 
-                borderBottom: '1px solid rgba(203, 213, 225, 0.4)' 
-              }}
-            >
-              {hospitals.length > 0 ? '검색된 병원 위치' : '병원 위치'}
-            </Typography>
-            
-            <Box
-              sx={{
-                position: 'relative',
-                width: '100%',
-                height: '500px',
-              }}
-            >
-              <Box
-                ref={mapContainerRef}
-                sx={{
-                  width: '100%',
-                  height: '100%',
-                  backgroundColor: '#f8fafc',
-                  position: 'relative',
-                }}
-              />
-              {!map && (
-                <Box
-                  sx={{
-                    textAlign: 'center',
-                    color: '#6b7280',
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    zIndex: 1,
-                  }}
-                >
-                  <CircularProgress sx={{ mb: 2 }} />
-                  <Typography variant="body2">
-                    지도를 불러오는 중입니다...
-                  </Typography>
+            <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffffff', borderRadius: '12px', p: 1.5, boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
+              {geoData?.features?.length ? (
+                <KoreaGeoMap geoData={geoData} onSelectRegion={setSelectedRegion} />
+              ) : (
+                <Box sx={{ width: '100%', maxWidth: 560, aspectRatio: '4/5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888', fontSize: '0.9rem' }}>
+                  지도 데이터를 불러올 수 없습니다.
                 </Box>
               )}
             </Box>
-            
-            <Typography 
-              variant="caption" 
-              sx={{ 
-                display: 'block', 
-                p: 2, 
-                color: '#6b7280', 
-                textAlign: 'center' 
-              }}
-            >
-              {hospitals.length > 0 
-                ? '마커를 클릭하면 병원 정보를 확인할 수 있습니다'
-                : '지역명을 입력하고 검색 버튼을 클릭하여 병원을 찾아보세요'}
-            </Typography>
           </Box>
-
-          {/* 검색 결과 리스트 (선택사항) */}
-          {hospitals.length > 0 && (
-            <Box
-              sx={{
-                backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                borderRadius: 3,
-                border: '1px solid rgba(203, 213, 225, 0.8)',
-                p: 2,
-                maxHeight: '300px',
-                overflowY: 'auto',
-              }}
-            >
-              <Typography variant="subtitle2" sx={{ color: '#1f2937', fontWeight: 600, mb: 2 }}>
-                검색 결과 ({hospitals.length}개)
-              </Typography>
-              <Stack spacing={1}>
-                {hospitals.map((hospital, index) => (
-                  <Box
-                    key={hospital.id || index}
-                    onClick={() => {
-                      if (map) {
-                        const position = new window.kakao.maps.LatLng(hospital.y, hospital.x);
-                        map.setCenter(position);
-                        map.setLevel(3);
-                        if (infoWindows[index]) {
-                          infoWindows.forEach(iw => iw.close());
-                          infoWindows[index].open(map, markers[index]);
-                        }
-                      }
-                    }}
-                    sx={{
-                      p: 2,
-                      borderRadius: 2,
-                      border: '1px solid rgba(203, 213, 225, 0.4)',
-                      cursor: 'pointer',
-                      '&:hover': {
-                        backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                        borderColor: '#38bdf8',
-                      },
-                    }}
-                  >
-                    <Typography variant="body2" sx={{ fontWeight: 600, color: '#1f2937', mb: 0.5 }}>
-                      {hospital.place_name}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: '#6b7280', display: 'block' }}>
-                      {hospital.road_address_name || hospital.address_name}
-                    </Typography>
-                    {hospital.phone && (
-                      <Typography variant="caption" sx={{ color: '#6b7280', display: 'block' }}>
-                        {hospital.phone}
-                      </Typography>
-                    )}
-                  </Box>
-                ))}
-              </Stack>
+        ) : !showMapForRegion ? (
+          <Box sx={{ width: '100%', p: 3 }}>
+            <Typography sx={{ color: '#555', mb: 2, fontSize: '0.9rem' }}>
+              시/군/구를 선택하면 해당 지역이 지도에서 확대됩니다.
+            </Typography>
+            {districtGeoDataForRegion ? (
+              <>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center', mb: 2 }}>
+                  <Chip label="전체" size="medium" onClick={handleSelectAll} variant="outlined" color="primary" sx={{ fontSize: '0.9rem' }} />
+                </Box>
+                <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffffff', borderRadius: '12px', p: 1.5, boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
+                  <ProvinceDistrictMap
+                    districtGeoData={districtGeoDataForRegion}
+                    onSelectDistrict={handleSelectDistrict}
+                  />
+                </Box>
+              </>
+            ) : municipalityTopoLoading || districtGeoByRegionLoading ? (
+              <Box sx={{ py: 3, color: '#888', fontSize: '0.875rem' }}>시/군/구 지도 불러오는 중…</Box>
+            ) : (
+              <Box sx={{ py: 3, color: '#888', fontSize: '0.875rem' }}>해당 지역 시/군/구 데이터를 불러올 수 없습니다.</Box>
+            )}
+          </Box>
+        ) : (
+          <Box key={`detail-${selectedRegion}-${selectedDistrict || 'all'}`} sx={{ width: '100%', ...detailEnterStyle }}>
+            <Box sx={{ height: 460, width: '100%' }}>
+              <MapContainer
+                key={`map-${selectedRegion}-${selectedDistrict || 'all'}`}
+                center={REGION_CENTERS[selectedRegion] || [36.5, 127.5]}
+                zoom={10}
+                style={{ height: '100%', width: '100%' }}
+                scrollWheelZoom
+              >
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <MapViewport
+                  districtBounds={selectedDistrictBounds}
+                  regionCenter={REGION_CENTERS[selectedRegion]}
+                  hasDistrictSelected={!!selectedDistrict}
+                />
+                {selectedDistrictFeature && (
+                  <DistrictBoundaryOverlay districtFeature={selectedDistrictFeature} />
+                )}
+              </MapContainer>
             </Box>
-          )}
-        </Stack>
+          </Box>
+        )}
       </DialogContent>
     </Dialog>
   );
-};
-
-export default HospitalSearch;
-
+}

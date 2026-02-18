@@ -1,6 +1,4 @@
 import apiClient from './config';
-import axios from 'axios';
-import { getAccessToken } from './auth';
 import { getDatasetName } from '../utils/datasetMetadata';
 
 /**
@@ -130,33 +128,17 @@ export const getETLDataStatisticsByDateRange = async (from, to) => {
 export const getETLDataByOrigin = async (dsid, origin) => {
   const dataname = getDatasetName(dsid) || dsid;
   try {
-    // 전체 URL 사용: http://210.117.143.180:8100/data/api/v1/etl_data/id/{{dsid}}/origin/{{origin}}
-    const fullUrl = `http://210.117.143.180:8100/data/api/v1/etl_data/id/${dsid}/origin/${origin}`;
-    
-    console.log(`🔵 [origin API] ${dataname} (${dsid}) 요청 URL:`, fullUrl);
+    // baseURL(config.js: REACT_APP_API_URL)을 그대로 타도록 상대 경로 사용
+    const apiUrl = `/etl_data/id/${dsid}/origin/${origin}`;
+
+    console.log(`🔵 [origin API] ${dataname} (${dsid}) 요청 URL:`, apiUrl);
     console.log(`🔵 [origin API] 요청 파라미터:`, { dataname, dsid, origin });
-    
-    // 인증 토큰 가져오기
-    let token = null;
-    try {
-      token = await getAccessToken();
-    } catch (tokenError) {
-      console.warn('토큰 가져오기 실패 (인증 없이 요청 진행):', tokenError.message);
-    }
-    
-    // axios를 직접 사용하여 전체 URL로 요청
-    const response = await axios.get(fullUrl, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token && { Authorization: `Bearer ${token}` }),
-      },
-      timeout: 30000,
-    });
+
+    const response = await apiClient.get(apiUrl);
     
     console.log(`✅ [origin API] ${dataname} 응답 성공:`, {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
       dataType: typeof response.data,
       dataKeys: response.data ? Object.keys(response.data) : [],
       dataLength: Array.isArray(response.data) ? response.data.length : 'N/A',

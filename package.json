@@ -9,17 +9,21 @@
     "@mui/material": "^5.14.20",
     "axios": "^1.6.2",
     "chart.js": "^4.5.1",
+    "d3-geo": "^3.1.1",
     "http-proxy-middleware": "^2.0.6",
+    "leaflet": "^1.9.4",
     "react": "^18.3.1",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.3.1",
     "react-icons": "^5.5.0",
-    "recharts": "^2.10.3"
+    "react-leaflet": "^4.2.1",
+    "recharts": "^2.10.3",
+    "topojson-client": "^3.1.0"
   },
   "scripts": {
-    "start": "PORT=5090 react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
+    "start": "CHOKIDAR_USEPOLLING=true WATCHPACK_POLLING=true PORT=5090 craco start",
+    "build": "craco build",
+    "test": "craco test",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
@@ -40,6 +44,7 @@
     ]
   },
   "devDependencies": {
+    "@craco/craco": "^7.1.0",
     "@vitejs/plugin-react": "^5.1.2",
     "react-scripts": "5.0.1",
     "vite": "^7.3.1"

@@ -170,7 +170,6 @@ export const loadHistoricalCSVData = async (dsid = 'ds_0101') => {
  * @returns {Array} processETLData 형식의 데이터 배열
  */
 export const convertCSVToETLFormat = (csvData, dsid = 'ds_0101') => {
-  const dataname = getDatasetName(dsid) || dsid;
   return csvData.map((row, index) => {
     // 기본 필드 추출 (공백 변형 대응)
     const year = row['연도'] || row['연도 '] || row['﻿연도'] || row['﻿연도 '] || '';

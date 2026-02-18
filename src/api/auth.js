@@ -19,11 +19,21 @@ const isAuthConfigured = KEYCLOAK_SERVER_URL &&
 const TOKEN_KEY = 'auth_token';
 const TOKEN_EXPIRY_KEY = 'auth_token_expiry';
 
+// 로컬 ETL 목 API를 사용할 때는 인증(토큰)을 생략한다.
+// (Keycloak이 막혀있으면 토큰 요청이 오래 대기하며 전체 데이터 로딩이 멈출 수 있음)
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
+const IS_LOCAL_MOCK_API =
+  API_BASE_URL.includes('localhost:5001') || API_BASE_URL.includes('127.0.0.1:5001');
+
 /**
  * Keycloak에서 액세스 토큰 가져오기
  * @returns {Promise<string>} 액세스 토큰
  */
 export const getAccessToken = async () => {
+  if (IS_LOCAL_MOCK_API) {
+    return null;
+  }
+
   // 환경 변수가 설정되지 않았으면 에러
   if (!isAuthConfigured) {
     console.warn('Keycloak 인증 설정이 완료되지 않았습니다. .env 파일을 확인하세요.');
@@ -58,6 +68,7 @@ export const getAccessToken = async () => {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       withCredentials: false,
+      timeout: 5000,
     });
 
     const { access_token, expires_in } = response.data;

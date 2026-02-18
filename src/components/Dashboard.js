@@ -1,17 +1,16 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
+import { alpha } from '@mui/material/styles';
 import {
   Box,
+  Button,
   Container,
   FormControl,
   Grid,
   IconButton,
-  List,
-  ListItemButton,
   Link,
   Dialog,
   DialogContent,
   DialogTitle,
-  ListItemText,
   MenuItem,
   Paper,
   Select,
@@ -19,32 +18,30 @@ import {
   Typography,
   CircularProgress,
   Alert,
-  Chip,
   Checkbox,
   FormControlLabel,
-  Button,
-  ButtonGroup,
 } from '@mui/material';
 // API 호출은 커스텀 훅에서 처리됨
 import { useInfluenzaData } from '../hooks/useInfluenzaData';
 import { getETLDataBySeason, getETLDataByDateRange } from '../api/etlDataApi';
+import apiClient from '../api/config';
 import { processETLData } from '../utils/dataProcessors';
 import { loadHistoricalCSVData, convertCSVToETLFormat } from '../utils/csvDataLoader';
 import { getPrediction } from '../api/predictionApi';
-import { getIRISSData, getKRISSData } from '../api/influenzaApi';
 import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
   PointElement,
   LineElement,
+  ArcElement,
   // BarElement,
   Filler,
   Tooltip,
   Legend,
 } from 'chart.js';
-import { Line } from 'react-chartjs-2';
-import { FiChevronRight, FiX } from 'react-icons/fi';
+import { Doughnut, Line } from 'react-chartjs-2';
+import { FiX } from 'react-icons/fi';
 import { sortWeeksBySeason } from '../utils/seasonUtils';
 import HospitalSearch from './HospitalSearch';
 
@@ -53,21 +50,15 @@ ChartJS.register(
   LinearScale,
   PointElement,
   LineElement,
+  ArcElement,
   Filler,
   Tooltip,
   Legend,
 );
 
+// Chart brand color (keep the original cyan-blue tone)
 const PRIMARY_COLOR = '#38bdf8';
 const PRIMARY_FILL = 'rgba(56, 189, 248, 0.2)';
-
-const navItems = [
-  '대시보드',
-  '감염병 뉴스',
-  '주간 발생 동향',
-  '인플루엔자란?',
-  '근처 병원찾기',
-];
 
 const SEASON_OPTIONS = [
   '25/26',
@@ -81,10 +72,246 @@ const SEASON_OPTIONS = [
   '17/18',
 ];
 
-const WEEK_OPTIONS = Array.from({ length: 53 }, (_, i) => (i + 1).toString());
-
-const NEWS_PORTAL_URL = 'https://dportal.kdca.go.kr/pot/bbs/BD_selectBbsList.do?q_bbsSn=1008';
 const WEEKLY_REPORT_URL = 'https://dportal.kdca.go.kr/pot/bbs/BD_selectBbsList.do?q_bbsSn=1009';
+
+function clampNumber(n, min, max) {
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, n));
+}
+
+function formatStageValue(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '-';
+  return n.toFixed(1);
+}
+
+function buildGaugeConfig({ threshold, value }) {
+  const t = Number.isFinite(threshold) ? threshold : 9.1;
+  const current = Number.isFinite(value) ? value : 0;
+
+  const t5 = t * 5;
+  const t10 = t * 10;
+  const min = 0;
+  const computedMax = Math.max(t10 * 1.2, current * 1.1, t10 + 0.01);
+  const max = computedMax;
+
+  const seg1 = t; // 0 ~ T
+  const seg2 = Math.max(0, t5 - t); // T ~ 5T
+  const seg3 = Math.max(0, t10 - t5); // 5T ~ 10T
+  const seg4 = Math.max(0.01, max - t10); // 10T ~ max (ensure >0)
+
+  return {
+    min,
+    max,
+    t,
+    t5,
+    t10,
+    segments: [seg1, seg2, seg3, seg4],
+  };
+}
+
+function createNeedlePlugin({ color = '#0f172a' }) {
+  return {
+    id: 'gaugeNeedle',
+    afterDatasetsDraw(chart) {
+      const meta = chart.getDatasetMeta(0);
+      const arcs = meta?.data;
+      if (!arcs || arcs.length === 0) return;
+
+      // NOTE:
+      // - Chart.js는 plugins를 id로 디듀프/캐시하는 경우가 있어 클로저로 value를 들고 있으면
+      //   렌더 이후 값 변경이 needle에 반영되지 않을 수 있다.
+      // - 그래서 needle 값은 options.plugins.gaugeNeedle에서 읽는다.
+      const needleConfig = chart?.options?.plugins?.gaugeNeedle || {};
+      const min = Number.isFinite(needleConfig.min) ? needleConfig.min : 0;
+      const max = Number.isFinite(needleConfig.max) ? needleConfig.max : 1;
+      const value = Number.isFinite(needleConfig.value) ? needleConfig.value : 0;
+
+      const firstArc = arcs[0];
+      const lastArc = arcs[arcs.length - 1];
+      const centerX = firstArc.x;
+      const centerY = firstArc.y;
+      const outerRadius = firstArc.outerRadius;
+      const startAngle = firstArc.startAngle;
+      const endAngle = lastArc.endAngle;
+
+      const denom = max - min;
+      const ratio = denom > 0 ? clampNumber((value - min) / denom, 0, 1) : 0;
+      const angle = startAngle + ratio * (endAngle - startAngle);
+
+      const ctx = chart.ctx;
+      const len = outerRadius * 0.82;
+      const x = centerX + Math.cos(angle) * len;
+      const y = centerY + Math.sin(angle) * len;
+
+      ctx.save();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+
+      // needle cap
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // tip dot
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    },
+  };
+}
+
+function EpidemicGauge({ threshold, value }) {
+  const gauge = buildGaugeConfig({ threshold, value });
+  const needle = createNeedlePlugin({ color: '#6b7280' });
+
+  const data = {
+    labels: ['비유행', '보통', '높음', '매우 높음'],
+    datasets: [
+      {
+        data: gauge.segments,
+        backgroundColor: ['#2dd4bf', '#fde68a', '#fb923c', '#fb7185'],
+        borderWidth: 0,
+        hoverOffset: 0,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    rotation: -90,
+    circumference: 180,
+    // 반원 "막대(arc)"가 너무 두껍게 보이면 cutout을 키워서(=안쪽을 더 파서) 얇게 만든다.
+    cutout: '80%',
+    plugins: {
+      legend: { display: false },
+      tooltip: { enabled: false },
+      // needle plugin이 참조하는 동적 값
+      gaugeNeedle: {
+        min: gauge.min,
+        max: gauge.max,
+        value: Number.isFinite(value) ? value : 0,
+      },
+    },
+  };
+
+  return (
+    // 게이지 높이(=막대그래프 크기) 조절
+    <Box sx={{ position: 'relative', width: '100%', height: 160 }}>
+      <Doughnut data={data} options={options} plugins={[needle]} />
+      <Box
+        sx={{
+          position: 'absolute',
+          left: '50%',
+          top: '60%',
+          transform: 'translate(-50%, -50%)',
+          width: 88,
+          height: 40,
+          borderRadius: 999,
+          bgcolor: 'rgba(148, 163, 184, 0.24)',
+          border: '1px solid rgba(148, 163, 184, 0.35)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Typography variant="h5" sx={{ fontWeight: 900, letterSpacing: '-0.02em' }}>
+          {formatStageValue(value)}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
+function EpidemicLegend({ seasonLabel, threshold, currentStage }) {
+  const t = Number.isFinite(threshold) ? threshold : 9.1;
+  const t5 = t * 5;
+  const t10 = t * 10;
+
+  const rows = [
+    { key: '비유행', swatch: '#2dd4bf', range: `${t.toFixed(1)} 이하` },
+    { key: '보통', swatch: '#fde68a', range: `${t.toFixed(1)} 초과 ~ ${t5.toFixed(1)} 이하` },
+    { key: '높음', swatch: '#fb923c', range: `${t5.toFixed(1)} 초과 ~ ${t10.toFixed(1)} 이하` },
+    { key: '매우 높음', swatch: '#fb7185', range: `${t10.toFixed(1)} 초과` },
+  ];
+
+  return (
+    // "25/26절기 유행기준"을 감싸는 큰 네모칸(Paper) 제거: 내용만 노출
+    <Box>
+      <Typography variant="subtitle1" sx={{ fontWeight: 900, textAlign: 'center' }}>
+        {seasonLabel} 유행기준 : {t.toFixed(1)}
+      </Typography>
+      {/* range(예: "9.5 이하") ↔ 단계 pill(예: "비유행 ...")이 같은 줄에서 짝이 맞도록 row 단위로 렌더 */}
+      <Box sx={{ mt: 1.75, display: 'flex', flexDirection: 'column', gap: 1.75 }}>
+        {rows.map((r) => {
+          const isActive = currentStage === r.key;
+          return (
+            <Box
+              key={r.key}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 1,
+              }}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                <Box sx={{ width: 16, height: 16, bgcolor: r.swatch, borderRadius: 0.5, flex: '0 0 auto' }} />
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 800,
+                    color: 'text.primary',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {r.range}
+                </Typography>
+              </Box>
+
+              {/* 단계 칸(비유행/보통/높음/매우높음): 4개 동일한 작은 사이즈로 */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: '0 0 auto' }}>
+                <Box
+                  sx={(theme) => ({
+                    px: 0.75,
+                    borderRadius: 1,
+                    border: `1px solid ${alpha(r.swatch, isActive ? 0.55 : 0.25)}`,
+                    bgcolor: alpha(r.swatch, isActive ? (theme.palette.mode === 'dark' ? 0.22 : 0.12) : 0.06),
+                    width: 80,
+                    height: 28,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flex: '0 0 auto',
+                  })}
+                >
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: isActive ? 900 : 800,
+                      whiteSpace: 'nowrap',
+                      fontSize: '0.82rem',
+                      lineHeight: 1.15,
+                    }}
+                  >
+                    {r.key}
+                  </Typography>
+                </Box>
+              </Box>
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
 // 사용하지 않는 데이터 주석 처리
 // const vaccinationStats = [
 //   {
@@ -140,6 +367,19 @@ const WEEKLY_REPORT_URL = 'https://dportal.kdca.go.kr/pot/bbs/BD_selectBbsList.d
 //   },
 // };
 
+/**
+ * 대시보드 "단일 지표 라인차트"의 공통 데이터 포맷 생성기
+ *
+ * - X축(labels): 주차(1~53). 화면에서는 "주"를 제거하고 숫자만 표시합니다. (예: "32주" → "32")
+ *   - 주차 정렬은 화면에서 별도로 `sortWeeksBySeason`를 사용합니다.
+ *   - `sortWeeksBySeason`: 인플루엔자 절기 기준(36주~53주 → 다음 해 1주~35주)으로 정렬
+ * - Y축(values): 선택된 지표의 값 배열(라벨 인덱스와 1:1 매칭)
+ *   - ILI(ds_0101): "의사환자 분율" (외래 1,000명당 의사환자 분율) → 소수점 2자리로 표시
+ *   - ARI/SARI 등: 데이터셋별 핵심 필드(예: "입원환자 수") → 툴팁/카드에서 단위(unit)와 함께 표시
+ *
+ * 참고: 실제 값은 `useInfluenzaData`에서 가공되어 들어오며,
+ * 기본 모드는 "전체 평균(연령대별 값의 평균)"로 계산됩니다.
+ */
 const createLineConfig = (labels, values) => {
   // labels에서 "주" 제거하여 숫자만 표시 (예: "32주" -> "32")
   const formattedLabels = labels?.map(label => {
@@ -168,6 +408,12 @@ const createLineConfig = (labels, values) => {
   };
 };
 
+/**
+ * 절기 비교/연령대 비교처럼 "여러 시리즈"를 한 그래프에 그릴 때 사용하는 데이터 포맷
+ *
+ * - X축(labels): 주차(표시는 숫자만)
+ * - datasets: 시리즈 배열(각 시리즈의 label/색상/values 포함)
+ */
 // 여러 데이터셋을 비교하는 차트 설정 생성
 const createComparisonChartConfig = (labels, datasets) => {
   // labels에서 "주" 제거하여 숫자만 표시 (예: "32주" -> "32")
@@ -251,8 +497,35 @@ const sortAgeGroups = (ageGroups) => {
   });
 };
 
-// 비교 차트 옵션 (범례 표시)
-const comparisonChartOptions = {
+/**
+ * 비교 차트(절기/연령대 다중선)의 공통 옵션
+ *
+ * - X축: 주차(모든 주차 표시, 회전 허용)
+ * - Y축: 현재는 ILI 설명 문구가 기본으로 들어가 있음
+ *   - ILI: "/1,000명 당 의사환자 분율"
+ *   - 다른 지표는 `visitorOptionFactory`의 unit/formatter로 툴팁에서 구분
+ */
+const getYAxisTitleText = (graphId, unit) => {
+  switch (graphId) {
+    case 'ili':
+      return '의사환자 분율 (/1,000명당)';
+    case 'iriss':
+    case 'kriss':
+      return `인플루엔자 검출률${unit ? ` (${unit})` : ''}`;
+    case 'ari':
+    case 'sari':
+    case 'nedis':
+      return `환자 수${unit ? ` (${unit})` : ''}`;
+    default:
+      return unit ? `값 (${unit})` : '값';
+  }
+};
+
+/**
+ * 비교 차트 옵션(절기/연령대 다중선)
+ * - Y축 title은 "현재 선택된 지표"에 맞춰 동적으로 바뀜
+ */
+const comparisonChartOptionFactory = (yAxisTitleText) => ({
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
@@ -285,7 +558,7 @@ const comparisonChartOptions = {
           const value = context.parsed.y;
           if (value == null) return '데이터 없음';
           // ILI인 경우 소수점 둘째 자리까지, 나머지는 첫째 자리까지
-          const isILI = context.dataset.label?.includes('의사환자 분율') || context.dataset.label === 'ILI';
+          const isILI = yAxisTitleText?.includes('의사환자 분율');
           return `${context.dataset.label}: ${isILI ? value.toFixed(2) : value.toFixed(1)}`;
         },
       },
@@ -294,12 +567,18 @@ const comparisonChartOptions = {
   scales: {
     x: {
       grid: { display: false },
-      ticks: { 
-        color: '#6b7280', 
-        font: { size: 10 }, 
+      ticks: {
+        color: '#6b7280',
+        font: { size: 10 },
         maxRotation: 45,
         minRotation: 0,
         autoSkip: false, // 모든 주차 표시
+      },
+      title: {
+        display: true,
+        text: '주차 (Week)',
+        color: '#6b7280',
+        font: { size: 11 },
       },
     },
     y: {
@@ -307,16 +586,23 @@ const comparisonChartOptions = {
       ticks: { color: '#6b7280', font: { size: 10 } },
       title: {
         display: true,
-        text: '인플루엔자 의사환자 분율(/1,000명 당)',
+        text: yAxisTitleText || '값',
         color: '#6b7280',
         font: { size: 11 },
       },
     },
   },
   interaction: { intersect: false, mode: 'index' },
-};
+});
 
-const visitorOptionFactory = (formatter, seasonLabel, unit) => ({
+/**
+ * 단일 지표 차트 옵션 팩토리
+ *
+ * - X축: 주차(labels를 그대로 사용; "주" 제거는 createLineConfig/createComparisonChartConfig에서 처리)
+ * - Y축: 지표 값
+ * - Tooltip: formatter와 unit을 통해 "값 + 단위"를 일관되게 표기
+ */
+const visitorOptionFactory = (formatter, seasonLabel, unit, yAxisTitleText) => ({
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
@@ -355,10 +641,22 @@ const visitorOptionFactory = (formatter, seasonLabel, unit) => ({
           return this.getLabelForValue(value);
         },
       },
+      title: {
+        display: true,
+        text: '주차 (Week)',
+        color: '#6b7280',
+        font: { size: 11 },
+      },
     },
     y: {
       grid: { color: 'rgba(148, 163, 184, 0.2)', borderDash: [4, 4] },
       ticks: { color: '#6b7280', font: { size: 10 } },
+      title: {
+        display: true,
+        text: yAxisTitleText || (unit ? `값 (${unit})` : '값'),
+        color: '#6b7280',
+        font: { size: 11 },
+      },
     },
   },
   interaction: { intersect: false, mode: 'index' },
@@ -526,6 +824,20 @@ const calculateWeekChange = series => {
 //   </Box>
 // );
 
+/**
+ * 그래프 선택지(대시보드 상단 드롭다운) 정의
+ *
+ * - weeks: X축(주차)
+ * - values: Y축(지표 값)
+ * - unit: 툴팁/카드에 함께 표시될 단위
+ * - label/description: "무슨 지표인지" 사용자 설명 문구
+ *
+ * 값 산출 방식(중요):
+ * - `useInfluenzaData`에서 API/CSV 원자료를 가져온 뒤,
+ *   (연령대가 있는 지표의 경우) "연령대별 값들의 평균"을 주차별 대표값으로 계산해 `values`로 제공합니다.
+ * - ILI는 추가로 연령대별 시리즈(`ageGroups`)도 제공하며, 연령대를 선택하면 그 시리즈로 대체 표시됩니다.
+ * - 25/26절기 ILI는 예측(주황색 라인)이 추가로 표시될 수 있습니다.
+ */
 const graphChoices = [
   {
     id: 'ili',
@@ -604,12 +916,18 @@ const graphChoices = [
 const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMapOpened, activeMenuId = 'dashboard' }) => {
   const [selectedGraphId, setSelectedGraphId] = useState(graphChoices[0].id);
   const [selectedSeason, setSelectedSeason] = useState('25/26'); // 최신 절기로 초기화
-  const [selectedWeek, setSelectedWeek] = useState('37'); // 2024년 37주 - 실제 데이터가 있는 주차
+  const [selectedWeek] = useState('37'); // 2024년 37주 - 실제 데이터가 있는 주차
   const [selectedAgeGroup, setSelectedAgeGroup] = useState(null); // 선택된 연령대 (null이면 전체 평균)
   const [viewMode, setViewMode] = useState('single'); // 'single', 'season', 'ageGroup' - 그래프 표시 모드
   const [selectedSeasons, setSelectedSeasons] = useState(['24/25', '25/26']); // 절기별 비교용 선택된 절기들
   const [selectedAgeGroups, setSelectedAgeGroups] = useState(['0세', '1-6세', '7-12세', '13-18세', '19-49세', '50-64세', '65세이상']); // 연령대별 비교용 선택된 연령대들
   const [newsDialogOpen, setNewsDialogOpen] = useState(false);
+  const [newsItems, setNewsItems] = useState([]);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [newsError, setNewsError] = useState(null);
+  const [newsSelected, setNewsSelected] = useState(null);
+  const newsIframeLoadedRef = useRef(false);
+  const newsFallbackTimerRef = useRef(null);
   const [weeklyReportDialogOpen, setWeeklyReportDialogOpen] = useState(false);
   const [influenzaDialogOpen, setInfluenzaDialogOpen] = useState(false);
   const [hospitalSearchOpen, setHospitalSearchOpen] = useState(false);
@@ -629,7 +947,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
 
   // 예측 데이터 (25/26절기용)
   const [predictionData, setPredictionData] = useState(null);
-  const [predictionLoading, setPredictionLoading] = useState(false);
+  const [, setPredictionLoading] = useState(false);
 
   // 에러 상태 관리 (사용자가 닫을 수 있도록)
   const [error, setError] = useState(null);
@@ -641,6 +959,63 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
     }
   }, [apiError]);
 
+  // 감염병 뉴스 로드 (뉴스 페이지 또는 Dialog 열릴 때)
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadNews() {
+      setNewsLoading(true);
+      setNewsError(null);
+      try {
+        const res = await apiClient.get('/news', { params: { limit: 60 } });
+        const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+        if (!cancelled) setNewsItems(items);
+      } catch (e) {
+        if (!cancelled) {
+          setNewsError('뉴스를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+          setNewsItems([]);
+        }
+      } finally {
+        if (!cancelled) setNewsLoading(false);
+      }
+    }
+
+    const shouldLoadNews = newsDialogOpen || activeMenuId === 'news';
+
+    if (shouldLoadNews) {
+      setNewsSelected(null);
+      newsIframeLoadedRef.current = false;
+      if (newsFallbackTimerRef.current) {
+        clearTimeout(newsFallbackTimerRef.current);
+        newsFallbackTimerRef.current = null;
+      }
+      loadNews();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [newsDialogOpen, activeMenuId]);
+
+  const openNewsItem = (item) => {
+    if (!item?.link) return;
+    // 많은 언론사가 iframe을 막으므로, 바로 새 탭에서 원문을 여는 방식으로 단순화
+    window.open(item.link, '_blank', 'noopener,noreferrer');
+  };
+
+  const formatNewsTime = (isoString) => {
+    if (!isoString) return '';
+    const d = new Date(isoString);
+    // eslint-disable-next-line no-restricted-globals
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('ko-KR', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   // 25/26절기 선택 시 예측 API 호출
   useEffect(() => {
     const fetchPrediction = async () => {
@@ -650,11 +1025,10 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
         return;
       }
 
-      const iliWeeks = influenzaData.ili.weeks || [];
       const iliValues = influenzaData.ili.values || [];
 
       // 최소 2주차까지 데이터가 있어야 예측 가능
-      if (iliWeeks.length < 2 || iliValues.length < 2) {
+      if (iliValues.length < 2) {
         setPredictionData(null);
         return;
       }
@@ -701,6 +1075,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
   useEffect(() => {
     const loadSeasonData = async () => {
       const newSeasonData = { ...seasonComparisonData };
+      const initialKeyCount = Object.keys(newSeasonData).length;
       
       for (const season of selectedSeasons) {
         // 이미 로드된 데이터가 있으면 스킵
@@ -1106,18 +1481,21 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
         }
       }
 
-      setSeasonComparisonData(newSeasonData);
+      // 이미 로드된 키만 있는 경우에는 setState를 하지 않아 루프/불필요 렌더링을 방지
+      if (Object.keys(newSeasonData).length !== initialKeyCount) {
+        setSeasonComparisonData(newSeasonData);
+      }
     };
 
     // 절기별 비교 모드일 때만 데이터 로드
     if (viewMode === 'season' && selectedSeasons.length > 0) {
       loadSeasonData();
     }
-  }, [selectedSeasons, viewMode, defaultDSID]);
+  }, [selectedSeasons, viewMode, defaultDSID, seasonComparisonData]);
 
   // 유행단계 및 주간 요약 데이터 상태 (향후 API 연동 예정)
-  const [stageData, setStageData] = useState(null);
-  const [weeklySummaryData, setWeeklySummaryData] = useState(null);
+  const stageData = null;
+  const weeklySummaryData = null;
 
   // 유행기준 상태
   const [epidemicThreshold, setEpidemicThreshold] = useState(9.1);
@@ -1201,7 +1579,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
           let consecutiveStartIndex = -1;
           
           for (let i = 0; i < sortedWeeks.length; i++) {
-            const { key, year, week, avgRate } = sortedWeeks[i];
+            const { avgRate } = sortedWeeks[i];
             
             if (avgRate < 2.0) {
               if (consecutiveCount === 0) {
@@ -1346,7 +1724,6 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
   // 주간 유행단계 데이터 (최신 ILI 데이터 기반으로 계산)
   const weeklyStageData = useMemo(() => {
     const iliValues = influenzaData?.ili?.values || [];
-    const iliWeeks = influenzaData?.ili?.weeks || [];
     
     if (iliValues.length === 0) {
       return stageData?.weekly || [
@@ -1453,34 +1830,24 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
     }
     
     return updatedMetrics;
-  }, [weeklySummaryData, currentStageValue, weeklyStageData]);
-
-  const handleNewsDialogOpen = () => {
-    setNewsDialogOpen(true);
-  };
+  }, [weeklySummaryData, currentStageValue, weeklyStageData, epidemicThreshold]);
 
   const handleNewsDialogClose = () => {
     setNewsDialogOpen(false);
-  };
-
-  const handleWeeklyReportDialogOpen = () => {
-    setWeeklyReportDialogOpen(true);
+    setNewsSelected(null);
+    newsIframeLoadedRef.current = false;
+    if (newsFallbackTimerRef.current) {
+      clearTimeout(newsFallbackTimerRef.current);
+      newsFallbackTimerRef.current = null;
+    }
   };
 
   const handleWeeklyReportDialogClose = () => {
     setWeeklyReportDialogOpen(false);
   };
 
-  const handleInfluenzaDialogOpen = () => {
-    setInfluenzaDialogOpen(true);
-  };
-
   const handleInfluenzaDialogClose = () => {
     setInfluenzaDialogOpen(false);
-  };
-
-  const handleHospitalSearchOpen = () => {
-    setHospitalSearchOpen(true);
   };
 
   const handleHospitalSearchClose = () => {
@@ -1488,44 +1855,6 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
   };
 
   // API 데이터 로딩은 useInfluenzaData 훅에서 처리됨
-
-  // 유행단계 데이터 로딩 (현재는 사용하지 않음)
-  useEffect(() => {
-    // TODO: 실제 API 연동 시 주석 해제
-    /*
-    const fetchStageData = async () => {
-      try {
-        const data = await getInfluenzaStage();
-        if (data) {
-          setStageData(data);
-        }
-      } catch (err) {
-        console.warn('유행단계 데이터 로딩 실패:', err);
-      }
-    };
-
-    fetchStageData();
-    */
-  }, []);
-
-  // 주간 지표 요약 데이터 로딩 (현재는 사용하지 않음)
-  useEffect(() => {
-    // TODO: 실제 API 연동 시 주석 해제
-    /*
-    const fetchWeeklySummary = async () => {
-      try {
-        const data = await getWeeklySummary();
-        if (data) {
-          setWeeklySummaryData(data);
-        }
-      } catch (err) {
-        console.warn('주간 지표 요약 데이터 로딩 실패:', err);
-      }
-    };
-
-    fetchWeeklySummary();
-    */
-  }, []);
 
   // 사이드바 메뉴에서 병원 찾기 클릭 시 다이얼로그 열기
   useEffect(() => {
@@ -1539,9 +1868,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
 
   // 사이드바 메뉴 클릭 시 다이얼로그 열기
   useEffect(() => {
-    if (activeMenuId === 'news') {
-      setNewsDialogOpen(true);
-    } else if (activeMenuId === 'weekly') {
+    if (activeMenuId === 'weekly') {
       setWeeklyReportDialogOpen(true);
     } else if (activeMenuId === 'influenza') {
       setInfluenzaDialogOpen(true);
@@ -1567,21 +1894,18 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
           displayWeeks = apiData.ageGroups[selectedAgeGroup].weeks;
         }
         
-        // 주차를 절기별로 정렬 (36주부터 시작해서 다음 해 35주까지)
-        const sortedWeeks = [...displayWeeks].sort((a, b) => sortWeeksBySeason(a, b));
-        
-        // 정렬된 주차에 맞춰 값도 재정렬
-        // 실제 데이터가 있는 주차만 포함 (null 값이 아닌 주차만)
-        const sortedValues = sortedWeeks.map(week => {
-          const index = displayWeeks.indexOf(week);
-          return index !== -1 ? displayValues[index] : null;
-        });
-        
-        // null 값이 아닌 주차와 값만 필터링 (실제 데이터가 있는 주차만 표시)
-        const validWeekValuePairs = sortedWeeks
-          .map((week, index) => ({ week, value: sortedValues[index] }))
-          .filter(pair => pair.value !== null && pair.value !== undefined);
-        
+        // 주차/값 쌍을 먼저 만들고, 유효한 것만 정렬/필터링한다.
+        // (일부 절기/연령대에서 weeks에 undefined가 섞이면 sortWeeksBySeason 내부 a.toString()이 크래시 날 수 있음)
+        const weekValuePairs = (Array.isArray(displayWeeks) ? displayWeeks : []).map((week, index) => ({
+          week,
+          value: Array.isArray(displayValues) ? displayValues[index] : undefined,
+        }));
+
+        const validWeekValuePairs = weekValuePairs
+          .filter(pair => pair.week !== null && pair.week !== undefined && pair.week !== '')
+          .filter(pair => pair.value !== null && pair.value !== undefined)
+          .sort((a, b) => sortWeeksBySeason(a.week, b.week));
+
         const finalWeeks = validWeekValuePairs.map(pair => pair.week);
         const finalValues = validWeekValuePairs.map(pair => pair.value);
         
@@ -1616,8 +1940,16 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
       return selectedGraph.data;
     }
 
+    // 주차/값이 없으면 예측 주차를 계산할 수 없으므로 기본 차트로 폴백
+    if (!Array.isArray(weeks) || weeks.length === 0 || !Array.isArray(values) || values.length === 0) {
+      return selectedGraph.data;
+    }
+
     // 마지막 주차에서 다음 주차들 계산
     const lastWeek = weeks[weeks.length - 1];
+    if (lastWeek === null || lastWeek === undefined) {
+      return selectedGraph.data;
+    }
     const lastWeekStr = lastWeek.toString().replace(/주/g, '').trim();
     let lastWeekNum = parseInt(lastWeekStr) || 0;
 
@@ -1632,9 +1964,8 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
       predictionWeeks.push(`${weekNum}주`);
     }
 
-    // 전체 주차와 값 결합
+    // 전체 주차 결합 (x축)
     const allWeeks = [...weeks, ...predictionWeeks];
-    const allValues = [...values, ...predictions];
 
     // 실제 데이터와 예측 데이터 구분
     const actualData = [...values, ...new Array(predictions.length).fill(null)];
@@ -1688,7 +2019,13 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
   }, [selectedSeason, selectedGraphId, predictionData, selectedGraph]);
 
   const visitorOptions = useMemo(() => {
-    const baseOptions = visitorOptionFactory(selectedGraph.formatter, selectedGraph.seasonLabel, selectedGraph.unit);
+    const yAxisTitleText = getYAxisTitleText(selectedGraphId, selectedGraph.unit);
+    const baseOptions = visitorOptionFactory(
+      selectedGraph.formatter,
+      selectedGraph.seasonLabel,
+      selectedGraph.unit,
+      yAxisTitleText
+    );
     
     // 예측값이 있으면 범례 표시
     if (selectedSeason === '25/26' && selectedGraphId === 'ili' && predictionData) {
@@ -1742,22 +2079,127 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
     };
   }, [selectedGraph]);
 
+  // 감염병 뉴스 전체 페이지 (Sidebar에서 '감염병 뉴스' 선택 시)
+  if (activeMenuId === 'news') {
+    return (
+      <Box
+        sx={{
+          bgcolor: 'background.paper',
+          minHeight: '100vh',
+          pt: 2,
+          pb: 4,
+          marginLeft: isOpen ? '240px' : '64px',
+          marginTop: '60px',
+          transition: 'margin-left 0.3s ease',
+        }}
+      >
+        <Container maxWidth="xl">
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="h5" sx={{ fontWeight: 800 }}>
+              감염병 뉴스
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              Google News 기반으로 감염병 관련 최신 뉴스를 모아서 보여줍니다.
+            </Typography>
+          </Box>
+          <Box sx={{ px: { xs: 0, md: 0 }, py: 1, height: { xs: 'calc(100vh - 140px)', md: 'calc(100vh - 150px)' }, overflow: 'auto' }}>
+            {newsLoading ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 8 }}>
+                <CircularProgress size={28} sx={{ mr: 2 }} />
+                <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 700 }}>
+                  뉴스를 불러오는 중...
+                </Typography>
+              </Box>
+            ) : newsError ? (
+              <Alert severity="warning">{newsError}</Alert>
+            ) : newsItems.length === 0 ? (
+              <Typography variant="body2" sx={{ color: 'text.secondary', textAlign: 'center', py: 8 }}>
+                표시할 뉴스가 없습니다.
+              </Typography>
+            ) : (
+              <Stack spacing={1.25}>
+                {newsItems.map((item) => (
+                  <Paper
+                    key={item.link}
+                    elevation={0}
+                    onClick={() => openNewsItem(item)}
+                    sx={(theme) => ({
+                      p: 2,
+                      // 뉴스 카드는 둥근 모서리 대신 각지게
+                      borderRadius: 0,
+                      border: `1px solid ${theme.palette.divider}`,
+                      bgcolor:
+                        theme.palette.mode === 'dark'
+                          ? 'rgba(255, 255, 255, 0.04)'
+                          : 'rgba(15, 23, 42, 0.02)',
+                      cursor: 'pointer',
+                      '&:hover': {
+                        bgcolor: alpha(theme.palette.primary.main, 0.06),
+                      },
+                    })}
+                  >
+                    <Typography variant="body2" sx={{ fontWeight: 900, color: 'text.primary' }}>
+                      {item.title}
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.75 }}>
+                      {item.source ? (
+                        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 800 }}>
+                          {item.source}
+                        </Typography>
+                      ) : null}
+                      {item.publishedAt ? (
+                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                          {formatNewsTime(item.publishedAt)}
+                        </Typography>
+                      ) : null}
+                      {item.keyword ? (
+                        <Typography
+                          variant="caption"
+                          sx={(theme) => ({
+                            color: 'text.secondary',
+                            fontWeight: 800,
+                            px: 1,
+                            py: 0.25,
+                            borderRadius: 1,
+                            border: `1px solid ${theme.palette.divider}`,
+                            bgcolor:
+                              theme.palette.mode === 'dark'
+                                ? alpha('#ffffff', 0.04)
+                                : alpha('#0f172a', 0.02),
+                          })}
+                        >
+                          {item.keyword}
+                        </Typography>
+                      ) : null}
+                    </Box>
+                  </Paper>
+                ))}
+              </Stack>
+            )}
+          </Box>
+        </Container>
+      </Box>
+    );
+  }
+
   return (
-    <Box sx={{ 
-      backgroundColor: '#f8fafc', 
-      minHeight: '100vh', 
-      color: '#1f2937', 
-      py: 4,
-      marginLeft: isOpen ? '240px' : '64px',
-      marginTop: '60px',
-      transition: 'margin-left 0.3s ease',
-    }}>
+    <Box
+      sx={{
+        bgcolor: 'background.default',
+        minHeight: '100vh',
+        pt: 2,
+        pb: 4,
+        marginLeft: isOpen ? '240px' : '64px',
+        marginTop: '60px',
+        transition: 'margin-left 0.3s ease',
+      }}
+    >
       <Container maxWidth="xl">
         {/* 로딩 상태 표시 */}
         {loading && (
           <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 4 }}>
             <CircularProgress sx={{ mr: 2 }} />
-            <Typography variant="body1" sx={{ color: '#6b7280' }}>
+            <Typography variant="body1" sx={{ color: 'text.secondary' }}>
               데이터를 불러오는 중...
             </Typography>
           </Box>
@@ -1776,226 +2218,78 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
             </Box>
           </Alert>
         )}
-        <Box
-          sx={{
-            borderRadius: 4,
-            boxShadow: '0 40px 120px rgba(0, 0, 0, 0.1)',
-            background: 'linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%)',
-            border: '1px solid rgba(203, 213, 225, 0.2)',
-            display: 'flex',
-            overflow: 'hidden',
-          }}
-        >
-          <Box sx={{ flex: 1, p: { xs: 3, md: 5 }, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 3 }}>
-              <Typography
-                variant="h5"
-                sx={{
-                  fontWeight: 700,
-                  color: '#1f2937',
-                  fontFamily: 'Pretendard',
-                }}
-              >
-                Influenza Overview
-              </Typography>
-            </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+            <Box />
+          </Box>
 
-            <Grid container spacing={4}>
+          {/* 같은 row(그래프/카드)의 높낮이를 맞추기 위해 stretch 적용 */}
+          <Grid container spacing={3} alignItems="stretch">
               <Grid item xs={12} md={4}>
                 <Paper
                   elevation={0}
                   sx={{
-                    p: 4,
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                    borderRadius: 4,
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                    p: 3,
+                    bgcolor: 'background.paper',
+                    borderRadius: 3,
+                    boxShadow: 2,
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
                   }}
                 >
-                  <Typography variant="h6" sx={{ fontWeight: 700, color: '#1f2937', mb: 3 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 800, mb: 2.5 }}>
                     인플루엔자 유행단계
                   </Typography>
                   <Box
-                    sx={{
-                      backgroundColor: 'rgba(248, 250, 252, 0.9)',
-                      borderRadius: 4,
-                      p: { xs: 2.5, md: 3 },
-                      border: '1px solid rgba(203, 213, 225, 0.8)',
+                    sx={(theme) => ({
+                      // 유행단계 카드 내부의 "회색 칸(배경/테두리)" 제거
+                      bgcolor: 'transparent',
+                      borderRadius: 0,
+                      p: { xs: 2, md: 2.5 },
+                      border: 'none',
+                      flex: 1,
                       display: 'flex',
                       flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      height: '100%',
-                    }}
+                    })}
                   >
-                    {/* 현재 단계 표시 */}
-                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 3 }}>
-                      <Box
-                        component="img"
-                        src={currentStageInfo.image}
-                        alt="현재 유행단계"
-                        sx={{
-                          width: 120,
-                          height: 120,
-                          mb: 2,
-                        }}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                      {/* 1) 게이지: 항상 최상단 */}
+                      <EpidemicGauge threshold={epidemicThreshold} value={currentStageValue} />
+
+                      {/* 2) 현재 단계/설명 */}
+                      <Box sx={{ textAlign: 'center', mt: -0.75 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 900, color: 'text.primary' }}>
+                          {currentStageInfo.stage}
+                        </Typography>
+                      </Box>
+
+                      {/* 3) 유행기준/범례: 게이지 아래 */}
+                      <EpidemicLegend
+                        seasonLabel={`${selectedSeason}절기`}
+                        threshold={epidemicThreshold}
+                        currentStage={currentStageInfo.stage}
                       />
-                      <Typography variant="h4" sx={{ color: currentStageInfo.color, fontWeight: 700, mb: 1 }}>
-                        {currentStageValue.toFixed(2)}
-                      </Typography>
-                      <Typography variant="body1" sx={{ color: '#1f2937', fontWeight: 600 }}>
-                        {currentStageInfo.stage}
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: 'rgba(75, 85, 99, 0.8)' }}>
-                        {currentStageInfo.description}
-                      </Typography>
-                    </Box>
 
-                    {/* 단계별 기준 정보 */}
-                    <Box 
-                      sx={{ 
-                        width: '100%', 
-                        mt: 2, 
-                        pt: 2, 
-                        borderTop: '1px solid rgba(203, 213, 225, 0.5)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 1.5,
-                      }}
-                    >
-                      <Typography variant="body2" sx={{ color: '#6b7280', fontWeight: 600, textAlign: 'center', mb: 1 }}>
-                        단계별 기준
-                      </Typography>
-                      
-                      {/* 매우 높음 단계 기준 */}
-                      <Box sx={{ 
-                        display: 'flex', 
-                        justifyContent: 'space-between', 
-                        alignItems: 'center',
-                        p: 1,
-                        backgroundColor: 'rgba(220, 38, 38, 0.1)',
-                        borderRadius: 1,
-                      }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Box
-                            component="img"
-                            src="/images/화남.png"
-                            alt="매우 높음"
-                            sx={{ width: 24, height: 24 }}
-                          />
-                          <Typography variant="caption" sx={{ color: '#1f2937', fontWeight: 600 }}>
-                            매우 높음
-                          </Typography>
-                        </Box>
-                        <Typography variant="caption" sx={{ color: '#dc2626', fontWeight: 700 }}>
-                          {epidemicThreshold.toFixed(2)} × 10 초과
+                      {/* 4) 주간 추이: 원래 위치(유행단계 카드 하단)로 복귀 */}
+                      <Box sx={{ mt: 2 }}>
+                        <Typography
+                          variant="caption"
+                          sx={{ color: 'text.secondary', fontWeight: 900, display: 'block', mb: 0.75 }}
+                        >
+                          주간 추이
                         </Typography>
-                      </Box>
-
-                      {/* 높음 단계 기준 */}
-                      <Box sx={{ 
-                        display: 'flex', 
-                        justifyContent: 'space-between', 
-                        alignItems: 'center',
-                        p: 1,
-                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                        borderRadius: 1,
-                      }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Box
-                            component="img"
-                            src="/images/화남.png"
-                            alt="높음"
-                            sx={{ width: 24, height: 24 }}
-                          />
-                          <Typography variant="caption" sx={{ color: '#1f2937', fontWeight: 600 }}>
-                            높음
-                          </Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+                          {(weeklyStageData || []).slice(0, 4).map((d) => (
+                            <Typography
+                              key={d.week}
+                              variant="body2"
+                              sx={{ color: 'text.secondary', fontWeight: 800, whiteSpace: 'nowrap' }}
+                            >
+                              {d.week} {typeof d.value === 'number' ? d.value.toFixed(2) : '-'}
+                            </Typography>
+                          ))}
                         </Box>
-                        <Typography variant="caption" sx={{ color: '#ef4444', fontWeight: 700 }}>
-                          {epidemicThreshold.toFixed(2)} × 5 초과 ~ {epidemicThreshold.toFixed(2)} × 10 이하
-                        </Typography>
-                      </Box>
-
-                      {/* 보통 단계 기준 */}
-                      <Box sx={{ 
-                        display: 'flex', 
-                        justifyContent: 'space-between', 
-                        alignItems: 'center',
-                        p: 1,
-                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                        borderRadius: 1,
-                      }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Box
-                            component="img"
-                            src="/images/보통.png"
-                            alt="보통"
-                            sx={{ width: 24, height: 24 }}
-                          />
-                          <Typography variant="caption" sx={{ color: '#1f2937', fontWeight: 600 }}>
-                            보통
-                          </Typography>
-                        </Box>
-                        <Typography variant="caption" sx={{ color: '#f59e0b', fontWeight: 700 }}>
-                          {epidemicThreshold.toFixed(2)} 초과 ~ {epidemicThreshold.toFixed(2)} × 5 이하
-                        </Typography>
-                      </Box>
-
-                      {/* 비유행 단계 기준 */}
-                      <Box sx={{ 
-                        display: 'flex', 
-                        justifyContent: 'space-between', 
-                        alignItems: 'center',
-                        p: 1,
-                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                        borderRadius: 1,
-                      }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <Box
-                            component="img"
-                            src="/images/웃음.png"
-                            alt="비유행"
-                            sx={{ width: 24, height: 24 }}
-                          />
-                          <Typography variant="caption" sx={{ color: '#1f2937', fontWeight: 600 }}>
-                            비유행
-                          </Typography>
-                        </Box>
-                        <Typography variant="caption" sx={{ color: '#22c55e', fontWeight: 700 }}>
-                          {epidemicThreshold.toFixed(2)} 이하
-                        </Typography>
-                      </Box>
-
-                      <Typography variant="caption" sx={{ color: 'rgba(75, 85, 99, 0.7)', textAlign: 'center', mt: 1, px: 2 }}>
-                        유행기준: 과거 3년간 비유행기간 ILI 분율 평균 + 2×표준편차
-                      </Typography>
-                    </Box>
-
-                    {/* 주간 추이 */}
-                    <Box sx={{ width: '100%' }}>
-                      <Typography variant="body2" sx={{ color: '#1f2937', fontWeight: 600, mb: 2, textAlign: 'center' }}>
-                        주간 추이
-                      </Typography>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
-                        {weeklyStageData.map((data, index) => {
-                          const stageInfo = getInfluenzaStageInfo(data.value);
-                          return (
-                            <Box key={index} sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                              <Box
-                                component="img"
-                                src={stageInfo.image}
-                                alt={data.week}
-                                sx={{ width: 40, height: 40, mb: 0.5 }}
-                              />
-                              <Typography variant="caption" sx={{ color: 'rgba(75, 85, 99, 0.8)' }}>
-                                {data.week}
-                              </Typography>
-                              <Typography variant="caption" sx={{ color: '#1f2937', fontWeight: 600 }}>
-                                {typeof data.value === 'number' ? data.value.toFixed(2) : data.value}
-                              </Typography>
-                            </Box>
-                          );
-                        })}
                       </Box>
                     </Box>
                   </Box>
@@ -2007,39 +2301,36 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                   elevation={0}
                   sx={{
                     p: 4,
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                    borderRadius: 4,
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                    height: '100%',
+                    bgcolor: 'background.paper',
+                    borderRadius: 3,
+                    boxShadow: 2,
                     display: 'flex',
                     flexDirection: 'column',
+                    height: '100%',
                   }}
                 >
-                  {/* 상단 여백을 줄임 */}
-                  <Box sx={{ flex: 0.3 }} />
-                  
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2, mb: 3 }}>
-                    <Box>
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: '#1f2937', mt: 0.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 800 }}>
                         {selectedGraph.label}
                       </Typography>
                       {selectedChange?.valueText ? (
-                        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mt: 1 }}>
-                          <Typography variant="h4" sx={{ fontWeight: 700, color: '#1f2937' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 0.75, flexWrap: 'wrap' }}>
+                          <Typography variant="h4" sx={{ fontWeight: 900, color: 'text.primary', letterSpacing: '-0.02em' }}>
                             {selectedChange.valueText}
                           </Typography>
                           {selectedChange?.text ? (
-                            <Typography variant="h6" sx={{ fontWeight: 700, color: selectedChange.color }}>
+                            <Typography variant="body1" sx={{ fontWeight: 800, color: selectedChange.color }}>
                               {selectedChange.text}
                             </Typography>
                           ) : null}
                         </Box>
                       ) : null}
                     </Box>
-                    
-                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                      {/* 절기 선택 드롭다운 */}
-                      <FormControl sx={{ minWidth: 100 }}>
+
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                      {/* 절기 선택 */}
+                      <FormControl sx={{ minWidth: 110 }}>
                         <Select
                           value={selectedSeason}
                           onChange={(e) => {
@@ -2047,55 +2338,50 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                           }}
                           displayEmpty
                           size="small"
-                          sx={{
-                            color: '#1f2937',
-                            backgroundColor: 'rgba(248, 250, 252, 0.9)',
-                            borderRadius: 2,
-                            '& .MuiOutlinedInput-notchedOutline': {
-                              borderColor: 'rgba(148, 163, 184, 0.3)',
-                            },
-                            '& .MuiSvgIcon-root': {
-                              color: '#374151',
-                            },
-                            '&:hover .MuiOutlinedInput-notchedOutline': {
-                              borderColor: 'rgba(56, 189, 248, 0.5)',
-                            },
-                            '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                              borderColor: '#38bdf8',
-                            },
-                          }}
-                          MenuProps={{
-                            PaperProps: {
-                              sx: {
-                                backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                                border: '1px solid rgba(203, 213, 225, 0.8)',
-                                borderRadius: 2,
-                              },
-                            },
-                          }}
                         >
                           {SEASON_OPTIONS.map((season) => (
                             <MenuItem 
                               key={season} 
                               value={season}
-                              sx={{ 
-                                color: '#1f2937',
-                                '&:hover': {
-                                  backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                                },
-                                '&.Mui-selected': {
-                                  backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                                },
-                              }}
                             >
                               {season}절기
                             </MenuItem>
                           ))}
                         </Select>
                       </FormControl>
+
+                      {/* 연령대별 필터: 절기 옆 드롭다운 바(ILI 단일 모드) */}
+                      {selectedGraphId === 'ili' && viewMode === 'single' && influenzaData.ili && influenzaData.ili.ageGroups ? (
+                        <FormControl sx={{ minWidth: 130 }}>
+                          <Select
+                            value={selectedAgeGroup ?? 'all'}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSelectedAgeGroup(v === 'all' ? null : v);
+                            }}
+                            size="small"
+                            renderValue={(selected) => (selected === 'all' ? '전체 평균' : selected)}
+                          >
+                            <MenuItem value="all">전체 평균</MenuItem>
+                            {sortAgeGroups(
+                              Object.keys(influenzaData.ili.ageGroups).filter((ageGroup) => {
+                                const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
+                                return (
+                                  !isSeason &&
+                                  (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상')
+                                );
+                              }),
+                            ).map((ageGroup) => (
+                              <MenuItem key={ageGroup} value={ageGroup}>
+                                {ageGroup}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      ) : null}
                       
-                      {/* 그래프 선택 드롭다운 */}
-                      <FormControl sx={{ minWidth: 120 }}>
+                      {/* 지표 선택 */}
+                      <FormControl sx={{ minWidth: 130 }}>
                         <Select
                           value={selectedGraphId}
                           onChange={(e) => {
@@ -2118,47 +2404,13 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                             const selectedOption = graphChoices.find(option => option.id === selected);
                             return selectedOption ? selectedOption.shorthand : '';
                           }}
-                          sx={{
-                            color: '#1f2937',
-                            backgroundColor: 'rgba(248, 250, 252, 0.9)',
-                            borderRadius: 2,
-                            '& .MuiOutlinedInput-notchedOutline': {
-                              borderColor: 'rgba(148, 163, 184, 0.3)',
-                            },
-                            '& .MuiSvgIcon-root': {
-                              color: '#374151',
-                            },
-                            '&:hover .MuiOutlinedInput-notchedOutline': {
-                              borderColor: 'rgba(56, 189, 248, 0.5)',
-                            },
-                            '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                              borderColor: '#38bdf8',
-                            },
-                          }}
-                          MenuProps={{
-                            PaperProps: {
-                              sx: {
-                                backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                                border: '1px solid rgba(203, 213, 225, 0.8)',
-                                borderRadius: 2,
-                              },
-                            },
-                          }}
                         >
                           <MenuItem 
                             value="main"
-                            sx={{ 
-                              color: '#1f2937',
-                              fontWeight: 600,
-                              backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                              '&:hover': {
-                                backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                              },
-                            }}
                           >
                             <Box>
-                              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                                🏠 메인페이지
+                              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                                메인페이지
                               </Typography>
                             </Box>
                           </MenuItem>
@@ -2166,18 +2418,9 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                             <MenuItem 
                               key={option.id} 
                               value={option.id}
-                              sx={{ 
-                                color: '#1f2937',
-                                '&:hover': {
-                                  backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                                },
-                                '&.Mui-selected': {
-                                  backgroundColor: 'rgba(56, 189, 248, 0.2)',
-                                },
-                              }}
                             >
                               <Box>
-                                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                <Typography variant="body2" sx={{ fontWeight: 700 }}>
                                   {option.shorthand}: {option.label}
                                 </Typography>
                               </Box>
@@ -2249,68 +2492,6 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                       </Box>
                     )}
 
-                    {/* 연령대별 필터 (단일 모드일 때만 표시) */}
-                    {selectedGraphId === 'ili' && viewMode === 'single' && influenzaData.ili && influenzaData.ili.ageGroups && (
-                      <Paper
-                        elevation={0}
-                        sx={{
-                          p: 2.5,
-                          mt: 2,
-                          backgroundColor: 'rgba(239, 246, 255, 0.8)',
-                          borderRadius: 2,
-                          border: '1px solid rgba(147, 197, 253, 0.5)',
-                        }}
-                      >
-                        <Box sx={{ mb: 1.5 }}>
-                          <Typography variant="body2" sx={{ color: '#1e40af', fontWeight: 600, mb: 0.5 }}>
-                            👥 연령대별 필터
-                          </Typography>
-                          <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem' }}>
-                            선택한 절기({selectedSeason})의 연령대별 데이터를 확인할 수 있습니다
-                          </Typography>
-                        </Box>
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                          <Chip
-                            label="전체 평균"
-                            onClick={() => setSelectedAgeGroup(null)}
-                            sx={{
-                              backgroundColor: selectedAgeGroup === null ? '#3b82f6' : 'rgba(203, 213, 225, 0.3)',
-                              color: selectedAgeGroup === null ? '#fff' : '#475569',
-                              fontWeight: selectedAgeGroup === null ? 600 : 400,
-                              cursor: 'pointer',
-                              border: selectedAgeGroup === null ? '2px solid #2563eb' : '1px solid rgba(203, 213, 225, 0.5)',
-                              '&:hover': {
-                                backgroundColor: selectedAgeGroup === null ? '#3b82f6' : 'rgba(59, 130, 246, 0.2)',
-                              },
-                            }}
-                          />
-                          {sortAgeGroups(Object.keys(influenzaData.ili.ageGroups)
-                            .filter(ageGroup => {
-                              // 절기 형식 제외 (예: "17/18", "24/25" 등)
-                              const isSeason = /^\d{2}\/\d{2}$/.test(ageGroup);
-                              // 연령대 형식만 포함 (예: "0세", "1-6세", "65세 이상" 등)
-                              return !isSeason && (ageGroup.includes('세') || ageGroup === '0세' || ageGroup === '연령미상');
-                            }))
-                            .map((ageGroup) => (
-                            <Chip
-                              key={ageGroup}
-                              label={ageGroup}
-                              onClick={() => setSelectedAgeGroup(ageGroup)}
-                              sx={{
-                                backgroundColor: selectedAgeGroup === ageGroup ? '#3b82f6' : 'rgba(203, 213, 225, 0.3)',
-                                color: selectedAgeGroup === ageGroup ? '#fff' : '#475569',
-                                fontWeight: selectedAgeGroup === ageGroup ? 600 : 400,
-                                cursor: 'pointer',
-                                border: selectedAgeGroup === ageGroup ? '2px solid #2563eb' : '1px solid rgba(203, 213, 225, 0.5)',
-                                '&:hover': {
-                                  backgroundColor: selectedAgeGroup === ageGroup ? '#3b82f6' : 'rgba(59, 130, 246, 0.2)',
-                                },
-                              }}
-                            />
-                          ))}
-                        </Box>
-                      </Paper>
-                    )}
                   </Box>
 
                   {(!selectedChange?.valueText || !selectedChange?.text) && (
@@ -2326,7 +2507,10 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                       {selectedChange?.text ?? '전 주 대비 변화 데이터 없음'}
                     </Typography>
                   )}
-                  <Box sx={{ height: 260, mt: 3 }}>
+                  {/* 아래 빈공간이 생기지 않도록: 늘어난 높이는 차트 영역이 가져가게 한다 */}
+                  {/* 필터 안내문구 제거로 확보된 세로 공간만큼 차트 영역을 조금 더 키움 */}
+                  {/* 위/아래 여백을 늘려 차트가 덜 커 보이게 */}
+                  <Box sx={{ flex: 1, minHeight: 200, mt: 5 }}>
                     {loading ? (
                       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
                         <CircularProgress size={40} />
@@ -2408,7 +2592,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                         return (
                           <Line
                             data={createComparisonChartConfig(sortedWeeks, datasets)}
-                            options={comparisonChartOptions}
+                            options={comparisonChartOptionFactory(getYAxisTitleText(selectedGraphId, selectedGraph?.unit))}
                           />
                         );
                       })()
@@ -2485,7 +2669,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                         return (
                           <Line
                             data={createComparisonChartConfig(sortedWeeks, datasets)}
-                            options={comparisonChartOptions}
+                            options={comparisonChartOptionFactory(getYAxisTitleText(selectedGraphId, selectedGraph?.unit))}
                           />
                         );
                       })()
@@ -2497,7 +2681,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                       />
                     )}
                   </Box>
-                  <Typography variant="caption" sx={{ color: 'rgba(148, 163, 184, 0.7)', display: 'block', mt: 2 }}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 3 }}>
                     {selectedGraph.description}
                   </Typography>
                 </Paper>
@@ -2590,65 +2774,78 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
               </Box>
             )}
 
-            <Grid container spacing={4}>
+            {/* 주간 지표 요약 + Feature Importance: 같은 row로 배치(디자인 유지, 배치만 변경) */}
+            <Grid container spacing={3} alignItems="stretch" sx={{ mt: 0.5, mb: 0.5 }}>
               <Grid item xs={12} md={6}>
                 <Paper
                   elevation={0}
                   sx={{
-                    p: 4,
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                    borderRadius: 4,
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                    p: 3,
+                    bgcolor: 'background.paper',
+                    borderRadius: 3,
+                    boxShadow: 2,
                     height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
                   }}
                 >
-                  <Typography variant="h6" sx={{ fontWeight: 700, color: '#1f2937', mb: 3 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 800, mb: 2.5, fontSize: '1.35rem' }}>
                     주간 지표 요약
                   </Typography>
-                  <Grid container spacing={2}>
-                    {weeklySummaryMetrics.map((metric, index) => (
-                      <Grid item xs={6} key={metric.title}>
-                        <Box
-                          sx={{
-                            p: 2.5,
-                            borderRadius: 3,
-                            backgroundColor: 'rgba(248, 250, 252, 0.9)',
-                            border: '1px solid rgba(203, 213, 225, 0.8)',
-                            height: '100%',
-                            display: 'flex',
-                            flexDirection: 'column',
-                          }}
-                        >
-                          <Typography variant="body1" sx={{ color: 'rgba(75, 85, 99, 0.8)', fontWeight: 600, mb: 2 }}>
+                  {/* 아래 빈공간이 생기면 KPI 카드들이 세로로 늘어나서 채우도록(Feature Importance 높이에 맞춰짐) */}
+                  <Box
+                    sx={{
+                      flex: 1,
+                      display: 'grid',
+                      gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+                      gap: 2.5,
+                      gridAutoRows: '1fr',
+                    }}
+                  >
+                    {weeklySummaryMetrics.slice(0, 4).map((metric) => (
+                      <Paper
+                        key={metric.title}
+                        elevation={0}
+                        sx={{
+                          p: 2.5,
+                          borderRadius: 2,
+                          bgcolor: 'background.paper',
+                          height: '100%',
+                          boxShadow: 2,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 1.25,
+                        }}
+                      >
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography
+                            variant="body2"
+                            sx={{ color: 'text.secondary', fontWeight: 700, fontSize: '1rem' }}
+                          >
                             {metric.title}
                           </Typography>
-                          
-                          <Typography variant="h5" sx={{ color: '#1f2937', fontWeight: 700, mb: 1 }}>
+                          <Typography variant="h5" sx={{ fontWeight: 800, mt: 1, fontSize: '2.1rem' }}>
                             {metric.value}
                           </Typography>
-                          
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                            <Typography 
-                              variant="body2" 
-                              sx={{ 
-                                color: metric.change.startsWith('+') ? '#22c55e' : '#ef4444',
-                                fontWeight: 600 
-                              }}
-                            >
-                              {metric.change}
-                            </Typography>
-                            <Typography variant="caption" sx={{ color: 'rgba(107, 114, 128, 0.7)' }}>
-                              전 주 대비
-                            </Typography>
-                          </Box>
-                          
-                          <Typography variant="caption" sx={{ color: 'rgba(107, 114, 128, 0.7)', fontSize: '0.7rem' }}>
-                            {metric.description}
+                        </Box>
+                        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, flexWrap: 'wrap' }}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: metric.change?.toString().trim().startsWith('-') ? 'error.main' : 'success.main',
+                              fontWeight: 800,
+                              fontSize: '1rem',
+                            }}
+                          >
+                            {metric.change}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.9rem' }}>
+                            from last week
                           </Typography>
                         </Box>
-                      </Grid>
+                      </Paper>
                     ))}
-                  </Grid>
+                  </Box>
                 </Paper>
               </Grid>
 
@@ -2656,15 +2853,15 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                 <Paper
                   elevation={0}
                   sx={{
-                    p: 4,
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                    borderRadius: 4,
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+                    p: 3,
+                    bgcolor: 'background.paper',
+                    borderRadius: 3,
+                    boxShadow: 2,
                     height: '100%',
                   }}
                 >
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-                    <Typography variant="h6" sx={{ fontWeight: 700, color: '#1f2937' }}>
+                    <Typography variant="h6" sx={{ fontWeight: 800 }}>
                       Feature Importance
                     </Typography>
                     <Box sx={{ display: 'flex', gap: 1 }}>
@@ -2676,7 +2873,8 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                             width: 8,
                             height: 8,
                             borderRadius: '50%',
-                            backgroundColor: currentFeaturePage === index ? '#38bdf8' : 'rgba(148, 163, 184, 0.4)',
+                            backgroundColor: (theme) =>
+                              currentFeaturePage === index ? theme.palette.primary.main : theme.palette.divider,
                             cursor: 'pointer',
                             transition: 'background-color 0.2s ease',
                           }}
@@ -2687,20 +2885,22 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
 
                   {/* 테이블 헤더 */}
                   <Box sx={{ mb: 2 }}>
-                    <Box sx={{ 
-                      display: 'grid', 
-                      gridTemplateColumns: '1fr 240px 80px', 
-                      gap: 2, 
-                      p: 2,
-                      borderBottom: '1px solid rgba(148, 163, 184, 0.2)'
-                    }}>
-                      <Typography variant="caption" sx={{ color: 'rgba(107, 114, 128, 0.9)', fontWeight: 600 }}>
+                    <Box
+                      sx={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 240px 80px',
+                        gap: 2,
+                        p: 2,
+                        borderBottom: (theme) => `1px solid ${theme.palette.divider}`,
+                      }}
+                    >
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700 }}>
                         Feature
                       </Typography>
-                      <Typography variant="caption" sx={{ color: 'rgba(107, 114, 128, 0.9)', fontWeight: 600 }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700 }}>
                         Importance
                       </Typography>
-                      <Typography variant="caption" sx={{ color: 'rgba(107, 114, 128, 0.9)', fontWeight: 600 }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700 }}>
                         Value
                       </Typography>
                     </Box>
@@ -2708,9 +2908,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
 
                   {/* 테이블 내용 */}
                   <Stack spacing={1}>
-                    {currentFeatures.map((item, index) => {
-                      const color = '#38bdf8'; // ili와 같은 파란색으로 통일
-                      
+                    {currentFeatures.map((item) => {
                       return (
                         <Box
                           key={item.feature}
@@ -2720,44 +2918,54 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
                             gap: 2,
                             p: 2,
                             borderRadius: 2,
-                            backgroundColor: 'rgba(241, 245, 249, 0.7)',
-                            border: '1px solid rgba(203, 213, 225, 0.6)',
+                            backgroundColor: (theme) =>
+                              theme.palette.mode === 'dark'
+                                ? 'rgba(255, 255, 255, 0.04)'
+                                : 'rgba(15, 23, 42, 0.02)',
+                            border: (theme) => `1px solid ${theme.palette.divider}`,
                             alignItems: 'center',
                           }}
                         >
                           <Box>
-                            <Typography variant="body2" sx={{ color: '#1f2937', fontWeight: 600 }}>
+                            <Typography variant="body2" sx={{ color: 'text.primary', fontWeight: 700 }}>
                               {item.feature}
                             </Typography>
                           </Box>
                           <Box sx={{ width: '100%' }}>
-                            <Box sx={{ 
-                              width: '100%', 
-                              height: 12, 
-                              backgroundColor: 'rgba(226, 232, 240, 0.6)', 
-                              borderRadius: 2, 
-                              overflow: 'hidden'
-                            }}>
+                            <Box
+                              sx={{
+                                width: '100%',
+                                height: 12,
+                                backgroundColor: (theme) =>
+                                  theme.palette.mode === 'dark'
+                                    ? 'rgba(255, 255, 255, 0.06)'
+                                    : 'rgba(148, 163, 184, 0.25)',
+                                borderRadius: 2,
+                                overflow: 'hidden',
+                              }}
+                            >
                               <Box
-                                sx={{
+                                sx={(theme) => ({
                                   width: `${item.importance * 100}%`,
                                   height: '100%',
-                                  backgroundColor: color,
+                                  backgroundColor: theme.palette.primary.main,
                                   borderRadius: 2,
                                   transition: 'width 0.3s ease-in-out',
-                                }}
+                                })}
                               />
                             </Box>
                           </Box>
-                          <Box sx={{ 
-                            backgroundColor: `${color}20`, 
-                            border: `1px solid ${color}40`,
-                            borderRadius: 1,
-                            px: 1.5,
-                            py: 0.5,
-                            textAlign: 'center'
-                          }}>
-                            <Typography variant="caption" sx={{ color: color, fontWeight: 700 }}>
+                          <Box
+                            sx={{
+                              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.10),
+                              border: (theme) => `1px solid ${alpha(theme.palette.primary.main, 0.28)}`,
+                              borderRadius: 1,
+                              px: 1.5,
+                              py: 0.5,
+                              textAlign: 'center',
+                            }}
+                          >
+                            <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 800 }}>
                               {(item.importance * 100).toFixed(1)}%
                             </Typography>
                           </Box>
@@ -2769,7 +2977,6 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
               </Grid>
             </Grid>
           </Box>
-        </Box>
       </Container>
       <HospitalSearch open={hospitalSearchOpen} onClose={handleHospitalSearchClose} />
       <Dialog
@@ -2904,41 +3111,177 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
             <FiX size={18} />
           </IconButton>
         </DialogTitle>
-        <DialogContent sx={{ p: 0, backgroundColor: 'rgba(9, 13, 23, 0.95)' }}>
-          <Box
-            component="iframe"
-            src={NEWS_PORTAL_URL}
-            title="KDCA 감염병 뉴스"
-            sx={{
-              width: '100%',
-              height: { xs: '70vh', md: '80vh' },
-              border: 0,
-              backgroundColor: '#fff',
-            }}
-          />
-          <Typography
-            variant="caption"
-            sx={{
-              display: 'block',
-              py: 1.5,
-              px: 3,
-              color: 'rgba(148, 163, 184, 0.7)',
-              backgroundColor: 'rgba(255, 255, 255, 0.95)',
-              borderTop: '1px solid rgba(148, 163, 184, 0.1)',
-            }}
-          >
-            외부 페이지가 보이지 않을 경우 새 창에서{' '}
-            <Link
-              href={NEWS_PORTAL_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              underline="always"
-              sx={{ color: '#38bdf8', fontWeight: 600, ml: 0.5 }}
-            >
-              감염병 뉴스 바로가기
-            </Link>
-            를 이용해 주세요.
-          </Typography>
+        <DialogContent sx={{ p: 0, bgcolor: 'background.paper' }}>
+          {newsSelected ? (
+            <Box sx={{ height: { xs: '70vh', md: '80vh' }, display: 'flex', flexDirection: 'column' }}>
+              <Box
+                sx={(theme) => ({
+                  px: 3,
+                  py: 1.5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 2,
+                  borderBottom: `1px solid ${theme.palette.divider}`,
+                  bgcolor: 'background.paper',
+                })}
+              >
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontWeight: 800,
+                    color: 'text.primary',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {newsSelected.title}
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: '0 0 auto' }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      setNewsSelected(null);
+                      newsIframeLoadedRef.current = false;
+                      if (newsFallbackTimerRef.current) {
+                        clearTimeout(newsFallbackTimerRef.current);
+                        newsFallbackTimerRef.current = null;
+                      }
+                    }}
+                  >
+                    목록
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    onClick={() => window.open(newsSelected.link, '_blank', 'noopener,noreferrer')}
+                  >
+                    새 탭
+                  </Button>
+                </Box>
+              </Box>
+
+              <Box
+                component="iframe"
+                src={newsSelected.link}
+                title={newsSelected.title}
+                onLoad={() => {
+                  newsIframeLoadedRef.current = true;
+                  if (newsFallbackTimerRef.current) {
+                    clearTimeout(newsFallbackTimerRef.current);
+                    newsFallbackTimerRef.current = null;
+                  }
+                }}
+                sx={{
+                  flex: 1,
+                  width: '100%',
+                  border: 0,
+                  backgroundColor: '#fff',
+                }}
+              />
+              <Typography
+                variant="caption"
+                sx={(theme) => ({
+                  display: 'block',
+                  py: 1.25,
+                  px: 3,
+                  color: 'text.secondary',
+                  bgcolor: 'background.paper',
+                  borderTop: `1px solid ${theme.palette.divider}`,
+                })}
+              >
+                원문이 앱 안에서 열리지 않으면 자동으로 새 탭으로 이동합니다. (필요 시{' '}
+                <Link
+                  href={newsSelected.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  underline="always"
+                  sx={{ color: 'primary.main', fontWeight: 800, ml: 0.5 }}
+                >
+                  새 탭으로 열기
+                </Link>
+                )
+              </Typography>
+            </Box>
+          ) : (
+            <Box sx={{ px: { xs: 2.5, md: 3 }, py: 2, height: { xs: '70vh', md: '80vh' }, overflow: 'auto' }}>
+              {newsLoading ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 8 }}>
+                  <CircularProgress size={28} sx={{ mr: 2 }} />
+                  <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 700 }}>
+                    뉴스를 불러오는 중...
+                  </Typography>
+                </Box>
+              ) : newsError ? (
+                <Alert severity="warning">{newsError}</Alert>
+              ) : newsItems.length === 0 ? (
+                <Typography variant="body2" sx={{ color: 'text.secondary', textAlign: 'center', py: 8 }}>
+                  표시할 뉴스가 없습니다.
+                </Typography>
+              ) : (
+                <Stack spacing={1.25}>
+                  {newsItems.map((item) => (
+                    <Paper
+                      key={item.link}
+                      elevation={0}
+                      onClick={() => openNewsItem(item)}
+                      sx={(theme) => ({
+                        p: 2,
+                        borderRadius: 2,
+                        border: `1px solid ${theme.palette.divider}`,
+                        bgcolor:
+                          theme.palette.mode === 'dark'
+                            ? 'rgba(255, 255, 255, 0.04)'
+                            : 'rgba(15, 23, 42, 0.02)',
+                        cursor: 'pointer',
+                        '&:hover': {
+                          bgcolor: alpha(theme.palette.primary.main, 0.06),
+                        },
+                      })}
+                    >
+                      <Typography variant="body2" sx={{ fontWeight: 900, color: 'text.primary' }}>
+                        {item.title}
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.75 }}>
+                        {item.source ? (
+                          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 800 }}>
+                            {item.source}
+                          </Typography>
+                        ) : null}
+                        {item.publishedAt ? (
+                          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                            {formatNewsTime(item.publishedAt)}
+                          </Typography>
+                        ) : null}
+                        {item.keyword ? (
+                          <Typography
+                            variant="caption"
+                            sx={(theme) => ({
+                              color: 'text.secondary',
+                              fontWeight: 800,
+                              px: 1,
+                              py: 0.25,
+                              borderRadius: 1,
+                              border: `1px solid ${theme.palette.divider}`,
+                              bgcolor:
+                                theme.palette.mode === 'dark'
+                                  ? alpha('#ffffff', 0.04)
+                                  : alpha('#0f172a', 0.02),
+                            })}
+                          >
+                            {item.keyword}
+                          </Typography>
+                        ) : null}
+                      </Box>
+                    </Paper>
+                  ))}
+                </Stack>
+              )}
+            </Box>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -3005,7 +3348,7 @@ const Dashboard = ({ isOpen = true, shouldOpenHospitalMap = false, onHospitalMap
               target="_blank"
               rel="noopener noreferrer"
               underline="always"
-              sx={{ color: '#38bdf8', fontWeight: 600, ml: 0.5 }}
+              sx={{ color: 'primary.main', fontWeight: 800, ml: 0.5 }}
             >
               주간 발생 동향 바로가기
             </Link>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getETLDataByDateRange, getETLDataBySeason, getETLDataByOrigin } from '../api/etlDataApi';
+import { getETLDataByDateRange, getETLDataByOrigin } from '../api/etlDataApi';
 import { getDateRangeFromSeason } from '../utils/dateUtils';
 import { processETLData } from '../utils/dataProcessors';
 import { loadHistoricalCSVData, convertCSVToETLFormat } from '../utils/csvDataLoader';
@@ -33,6 +33,9 @@ const fetchIndicatorData = async (indicatorKey, config, selectedSeason, selected
   const { dsid, preferredField, excludedFields } = config;
   const dataname = getDatasetName(dsid) || dsid;
   const isLatestSeason = selectedSeason === '25/26';
+  const apiBaseUrl = process.env.REACT_APP_API_URL || '';
+  const isLocalMockApi =
+    apiBaseUrl.includes('localhost:5001') || apiBaseUrl.includes('127.0.0.1:5001');
   
   try {
     let allRawData = [];
@@ -51,8 +54,24 @@ const fetchIndicatorData = async (indicatorKey, config, selectedSeason, selected
             const parsedData = JSON.parse(item.parsedData || '[]');
             if (Array.isArray(parsedData) && parsedData.length > 0) {
               const firstRow = parsedData[0];
-              const year = parseInt(firstRow['연도'] || firstRow['﻿연도'] || '0');
-              const week = parseInt(firstRow['주차'] || '0');
+              // 주차/연도 추출: (1) 연도/주차 컬럼 (2) "수집 기간"("2025년 36주") 모두 지원
+              let year = parseInt(firstRow['연도'] || firstRow['﻿연도'] || '0');
+              let week = parseInt(firstRow['주차'] || '0');
+
+              if (
+                !Number.isFinite(year) ||
+                Number.isNaN(year) ||
+                !Number.isFinite(week) ||
+                Number.isNaN(week)
+              ) {
+                const weekKey = firstRow['수집 기간'] || firstRow['﻿수집 기간'];
+                if (weekKey) {
+                  const yearMatch = weekKey.toString().match(/(\d{4})년/);
+                  const weekMatch = weekKey.toString().match(/(\d+)\s*주/);
+                  if (yearMatch) year = parseInt(yearMatch[1]);
+                  if (weekMatch) week = parseInt(weekMatch[1]);
+                }
+              }
               
               // 2025년 36주~42주만 포함
               if (year === 2025 && week >= 36 && week <= 42) {
@@ -77,29 +96,39 @@ const fetchIndicatorData = async (indicatorKey, config, selectedSeason, selected
       const dateRange = getDateRangeFromSeason(selectedSeason, selectedWeek);
       const tempApiData = await getETLDataByDateRange(dsid, '2025-09-01', dateRange.to);
       const tempApiRawData = tempApiData?.body?.data || tempApiData?.data || tempApiData;
-      
-      const origins = [];
-      if (Array.isArray(tempApiRawData)) {
-        tempApiRawData.forEach(item => {
-          if (item.origin && !origins.includes(item.origin)) {
-            origins.push(item.origin);
+
+      // 로컬 목 API는 날짜 범위 응답에 origin들이 이미 포함된 전체 데이터가 들어있으므로,
+      // origin별로 다시 쪼개서 수백 번 요청하지 말고 그대로 사용한다.
+      if (isLocalMockApi) {
+        if (Array.isArray(tempApiRawData)) {
+          allRawData.push(...tempApiRawData);
+        } else if (tempApiRawData) {
+          allRawData.push(tempApiRawData);
+        }
+      } else {
+        const origins = [];
+        if (Array.isArray(tempApiRawData)) {
+          tempApiRawData.forEach(item => {
+            if (item.origin && !origins.includes(item.origin)) {
+              origins.push(item.origin);
+            }
+          });
+        }
+        
+        // 각 origin별로 요청
+        for (const origin of origins) {
+          try {
+            const originData = await getETLDataByOrigin(dsid, origin);
+            const originRawData = originData?.body?.data || originData?.data || originData;
+            
+            if (Array.isArray(originRawData)) {
+              allRawData.push(...originRawData);
+            } else if (originRawData) {
+              allRawData.push(originRawData);
+            }
+          } catch (err) {
+            console.error(`❌ [${indicatorKey}] ${dataname} origin 요청 실패:`, origin, err.message);
           }
-        });
-      }
-      
-      // 각 origin별로 요청
-      for (const origin of origins) {
-        try {
-          const originData = await getETLDataByOrigin(dsid, origin);
-          const originRawData = originData?.body?.data || originData?.data || originData;
-          
-          if (Array.isArray(originRawData)) {
-            allRawData.push(...originRawData);
-          } else if (originRawData) {
-            allRawData.push(originRawData);
-          }
-        } catch (err) {
-          console.error(`❌ [${indicatorKey}] ${dataname} origin 요청 실패:`, origin, err.message);
         }
       }
       

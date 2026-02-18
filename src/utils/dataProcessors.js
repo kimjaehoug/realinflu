@@ -98,7 +98,6 @@ export const processETLData = (rawData, preferredField = '의사환자 분율', 
             // ds_0101(인플루엔자 의사환자 비율)은 "의사환자 분율" 데이터이므로 "의사환자 분율" 필드만 사용
             const valueFieldsFound = [];
             let valueToUse = null;
-            let valueFieldName = null;
             
             // 우선순위: preferredField 파라미터 > 기타 숫자 필드
             // 절기별 데이터의 경우 "입원환자 수"도 허용 (절기별 데이터는 "입원환자 수" 필드에 있을 수 있음)
@@ -112,7 +111,6 @@ export const processETLData = (rawData, preferredField = '의사환자 분율', 
               const value = parseFloat(row[preferredField]);
               if (!isNaN(value)) {
                 valueToUse = value;
-                valueFieldName = preferredField;
                 valueFieldsFound.push({ key: preferredField, value, used: true });
               }
             }
@@ -131,7 +129,6 @@ export const processETLData = (rawData, preferredField = '의사환자 분율', 
                   valueFieldsFound.push({ key, value, used: false });
                   if (valueToUse === null) {
                     valueToUse = value;
-                    valueFieldName = key;
                     valueFieldsFound[valueFieldsFound.length - 1].used = true;
                   }
                 }

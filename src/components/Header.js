@@ -1,17 +1,23 @@
 import React from 'react';
-import { Box, Typography, IconButton } from '@mui/material';
-import { FiUser, FiChevronDown } from 'react-icons/fi';
+import { alpha } from '@mui/material/styles';
+import { Badge, Box, IconButton, InputBase, Typography } from '@mui/material';
+import SearchIcon from '@mui/icons-material/Search';
+import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined';
+import TranslateOutlinedIcon from '@mui/icons-material/TranslateOutlined';
+import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined';
+import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
+import KeyboardArrowDownRoundedIcon from '@mui/icons-material/KeyboardArrowDownRounded';
 
-const Header = ({ isOpen }) => {
+const Header = ({ isOpen, colorMode = 'light', onToggleColorMode }) => {
   return (
     <Box
       sx={{
         height: 60,
-        backgroundColor: '#ffffff',
-        borderBottom: '1px solid rgba(0, 0, 0, 0.1)',
+        bgcolor: 'background.paper',
+        borderBottom: (theme) => `1px solid ${theme.palette.divider}`,
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'flex-end',
+        justifyContent: 'space-between',
         px: 3,
         position: 'fixed',
         top: 0,
@@ -21,45 +27,101 @@ const Header = ({ isOpen }) => {
         transition: 'left 0.3s ease',
       }}
     >
+      {/* Search */}
       <Box
-        sx={{
+        sx={(theme) => ({
+          flex: 1,
+          maxWidth: 520,
           display: 'flex',
           alignItems: 'center',
           gap: 1,
-          cursor: 'pointer',
-        }}
+          px: 1.5,
+          py: 0.75,
+          borderRadius: 999,
+          border: `1px solid ${theme.palette.divider}`,
+          bgcolor:
+            theme.palette.mode === 'dark'
+              ? alpha(theme.palette.common.white, 0.04)
+              : alpha(theme.palette.common.black, 0.02),
+        })}
       >
-        <Box
+        <SearchIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+        <InputBase
+          placeholder="Search"
+          inputProps={{ 'aria-label': 'search' }}
           sx={{
-            width: 32,
-            height: 32,
-            borderRadius: '50%',
-            backgroundColor: '#e5e7eb',
+            flex: 1,
+            fontSize: 14,
+            color: 'text.primary',
+            '& input::placeholder': { color: 'text.secondary', opacity: 1 },
+          }}
+        />
+      </Box>
+
+      {/* Right actions */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <IconButton
+          onClick={() => {
+            if (typeof onToggleColorMode === 'function') onToggleColorMode();
+          }}
+          sx={{ border: (theme) => `1px solid ${theme.palette.divider}` }}
+          aria-label="toggle color mode"
+        >
+          {colorMode === 'dark' ? <LightModeOutlinedIcon /> : <DarkModeOutlinedIcon />}
+        </IconButton>
+
+        <IconButton sx={{ border: (theme) => `1px solid ${theme.palette.divider}` }} aria-label="language">
+          <TranslateOutlinedIcon />
+        </IconButton>
+
+        <IconButton sx={{ border: (theme) => `1px solid ${theme.palette.divider}` }} aria-label="notifications">
+          <Badge color="error" variant="dot" overlap="circular">
+            <NotificationsNoneOutlinedIcon />
+          </Badge>
+        </IconButton>
+
+        <Box
+          sx={(theme) => ({
+            ml: 1,
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-          }}
+            gap: 1,
+            cursor: 'pointer',
+            px: 1,
+            py: 0.5,
+            borderRadius: 999,
+            '&:hover': {
+              bgcolor:
+                theme.palette.mode === 'dark'
+                  ? alpha(theme.palette.common.white, 0.06)
+                  : alpha(theme.palette.common.black, 0.04),
+            },
+          })}
         >
-          <FiUser size={18} color="#6b7280" />
+          <Box
+            sx={(theme) => ({
+              width: 32,
+              height: 32,
+              borderRadius: '50%',
+              bgcolor:
+                theme.palette.mode === 'dark'
+                  ? alpha(theme.palette.common.white, 0.08)
+                  : alpha(theme.palette.common.black, 0.06),
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 700,
+              color: 'text.secondary',
+              fontSize: 12,
+            })}
+          >
+            A
+          </Box>
+          <Typography variant="body2" sx={{ color: 'text.primary', fontWeight: 600 }}>
+            Admin
+          </Typography>
+          <KeyboardArrowDownRoundedIcon sx={{ color: 'text.secondary' }} />
         </Box>
-        <Typography
-          variant="body1"
-          sx={{
-            color: '#1f2937',
-            fontWeight: 500,
-            fontSize: '0.9rem',
-          }}
-        >
-          Admin
-        </Typography>
-        <IconButton
-          sx={{
-            p: 0,
-            color: '#6b7280',
-          }}
-        >
-          <FiChevronDown size={16} />
-        </IconButton>
       </Box>
     </Box>
   );
